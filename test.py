@@ -7,13 +7,13 @@ import re
 # ─────────────────────────────────────────────────────────────────
 # PAGE CONFIGURATION
 # ─────────────────────────────────────────────────────────────────
-st.set_page_config(page_title="DATABASE — Acoustic Laboratory", page_icon="🔊", layout="wide")
+st.set_page_config(page_title="DATABASE", page_icon="🔊", layout="wide")
 
 st.markdown("""
 <style>
     [data-testid="stSidebar"] { background-color: #0f1117; }
     [data-testid="stSidebar"] * { color: #e8e8e8 !important; }
-    .stMetric { background-color: #1e212b; padding: 15px; border-radius: 10px; border: 1px solid #333; }
+    .stMetric { background-color: #1e212b; padding: 15px; border-radius: 10px; border: 1px solid #333; width: fit-content; }
     h1 { color: #3b82f6 !important; font-weight: 800 !important; }
 </style>
 """, unsafe_allow_html=True)
@@ -138,10 +138,10 @@ def load_data(file_bytes: bytes):
 # ─────────────────────────────────────────────────────────────────
 st.title("🔊 DATABASE")
 
-uploaded_file = st.file_uploader("Upload Laboratory Data File (Database_Vx.xlsx)", type=["xlsx"])
+uploaded_file = st.file_uploader("Upload Data File (Database_Vx.xlsx)", type=["xlsx"])
 
 if not uploaded_file:
-    st.info("⬆️ Please upload an Excel database file to initialize the laboratory dashboard.")
+    st.info("⬆ nighttime Please upload an Excel database file to initialize the dashboard.")
     st.stop()
 
 df, mass_col = load_data(uploaded_file.read())
@@ -173,25 +173,17 @@ selected_labels = st.sidebar.multiselect(f"Select Samples ({len(available_labels
 abs_type = st.sidebar.radio("Measurement Method", ["alpha_cabin", "alpha_kundt"])
 
 if not selected_labels:
-    st.warning("👈 Select at least one sample from the sidebar to generate the laboratory charts.")
+    st.warning("👈 Select at least one sample from the sidebar to generate the charts.")
     st.stop()
 
 plot_data = fdf[fdf["curve_label"].isin(selected_labels)]
 
 # --- INTERACTIVE TABS ---
-tab1, tab2 = st.tabs(["📈 Interactive Plot", "🗃️ Raw Laboratory Data & Exports"])
+tab1, tab2 = st.tabs(["📈 Interactive Plot", "🗃️ Raw Data & Exports"])
 
 with tab1:
-    # --- SECURE KPIs ---
-    k1, k2, k3 = st.columns(3)
-    k1.metric("Compared Samples", len(selected_labels))
-    
-    avg_mass = pd.to_numeric(plot_data[mass_col], errors="coerce").mean()
-    avg_thick = pd.to_numeric(plot_data['thickness_mm'], errors="coerce").mean()
-    
-    k2.metric("Mean Surface Mass", f"{avg_mass:.0f} g/m²" if pd.notna(avg_mass) else "N/A")
-    k3.metric("Mean Thickness", f"{avg_thick:.1f} mm" if pd.notna(avg_thick) else "N/A")
-    
+    # --- KPI DISPLAY ---
+    st.metric("Compared Samples", len(selected_labels))
     st.markdown("<br>", unsafe_allow_html=True)
     
     # --- PLOTLY CONFIGURATION ---
@@ -201,8 +193,21 @@ with tab1:
     }
     ticks = FREQ_TICKS.get(abs_type, sorted(plot_data["frequency"].dropna().unique()))
 
-    # Professional laboratory color palette
-    COLORS = ["#1E40AF", "#991B1B", "#065F46", "#854D0E", "#5B21B6", "#0891B2", "#BE185D", "#111827", "#7C2D12"]
+    # High-contrast color palette covering distinct positions on the color wheel
+    COLORS = [
+        "#1D4ED8",  # Royal Blue
+        "#E11D48",  # Vivid Rose/Red
+        "#10B981",  # Emerald Green
+        "#F59E0B",  # Amber/Yellow
+        "#7C3AED",  # Deep Purple
+        "#EA580C",  # Intense Orange
+        "#06B6D4",  # Bright Cyan
+        "#EC4899",  # Deep Pink
+        "#6B7280",  # Slate Grey
+        "#84CC16",  # Lime Green
+        "#A16207",  # Dark Olive/Gold
+        "#4F46E5"   # Indigo
+    ]
 
     fig = go.Figure()
     for i, label in enumerate(selected_labels):
@@ -244,10 +249,10 @@ with tab1:
 
     # Standalone HTML Interactive Plot Export
     html_bytes = fig.to_html(include_plotlyjs="cdn").encode("utf-8")
-    st.download_button("🌐 Download Interactive Plot (HTML Web Format)", data=html_bytes, file_name="acoustic_absorption_chart.html", mime="text/html")
+    st.download_button("🌐 Download Interactive Plot (HTML Web Format)", data=html_bytes, file_name="absorption_chart.html", mime="text/html")
 
 with tab2:
-    st.markdown("### Screened Laboratory Dataset")
+    st.markdown("### Screened Dataset")
     show_cols = [c for c in ["stn", "curve_label", "frequency", abs_type] if c in plot_data.columns]
     
     # Clean export table
@@ -257,4 +262,4 @@ with tab2:
     st.dataframe(raw_output, use_container_width=True, hide_index=True)
     
     csv = raw_output.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Export Current Table (.CSV)", csv, "filtered_acoustic_data.csv", "text/csv")
+    st.download_button("📥 Export Current Table (.CSV)", csv, "filtered_data.csv", "text/csv")
