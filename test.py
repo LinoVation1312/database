@@ -70,41 +70,64 @@ def load_data(file_bytes: bytes):
     gnrl_sheet = next((s for s in xf.sheet_names if s.strip().upper().startswith("GNRL")), None)
     data_sheet = next((s for s in xf.sheet_names if s.strip().upper() == "DATA"), None)
     
-    if not gnrl_sheet or not data_sheet: return None, None
+    if not gnrl_sheet or not data_sheet: 
+        st.error("❌ Feuilles GNRL ou DATA introuvables.")
+        return None, None
 
     # --- GNRL ---
     raw = pd.read_excel(buf, sheet_name=gnrl_sheet, engine="openpyxl", header=None)
-    header_row = next((i for i, r in raw.iterrows() if any("sample number" in str(v).lower() for v in r if pd.notna(v))), None)
+    header_row = next((i for i, r in raw.iterrows() if any("sample" in str(v).lower() or "stn" in str(v).lower() for v in r if pd.notna(v))), None)
+    
+    if header_row is None:
+        st.error("❌ Ligne d'en-tête introuvable dans GNRL.")
+        return None, None
+
     gnrl = pd.read_excel(buf, sheet_name=gnrl_sheet, engine="openpyxl", header=header_row)
     gnrl.columns = norm_cols(gnrl.columns)
     gnrl = gnrl.dropna(how="all")
 
-    stn_cols = [c for c in gnrl.columns if "sample_number_stn" in c]
+    # Recherche robuste de la colonne STN dans GNRL
+    stn_cols = [c for c in gnrl.columns if "stn" in c or "sample" in c]
+    if not stn_cols:
+        st.error(f"❌ Colonne STN introuvable dans GNRL. Colonnes vues : {list(gnrl.columns)}")
+        return None, None
+        
     short_col = next((c for c in stn_cols if gnrl[c].dropna().astype(str).str.strip().str.match(r'^E\d+').mean() > 0.4), stn_cols[-1])
     gnrl = gnrl.rename(columns={short_col: "stn"})
     gnrl["stn"] = gnrl["stn"].astype(str).str.strip().str.upper()
     gnrl = gnrl[gnrl["stn"].str.match(r'^E\d+.*')]
 
     mass_col = next((c for c in gnrl.columns if "surface_mass" in c), None)
-    gnrl[mass_col] = pd.to_numeric(gnrl[mass_col], errors="coerce")
+    if mass_col:
+        gnrl[mass_col] = pd.to_numeric(gnrl[mass_col], errors="coerce")
     gnrl["thickness_mm"] = pd.to_numeric(gnrl.get("thickness_mm"), errors="coerce")
 
     # --- DATA ---
     data = pd.read_excel(buf, sheet_name=data_sheet, engine="openpyxl")
     data.columns = norm_cols(data.columns)
-    stn_data_col = next((c for c in data.columns if "sample_number_stn" in c), None)
-    data = data.rename(columns={stn_data_col: "stn"})
+    
+    # Recherche robuste de la colonne STN dans DATA
+    if "stn" not in data.columns:
+        stn_data_col = next((c for c in data.columns if "stn" in c or "sample" in c), None)
+        if stn_data_col:
+            data = data.rename(columns={stn_data_col: "stn"})
+        else:
+            st.error(f"❌ Colonne STN introuvable dans la feuille DATA. Colonnes vues : {list(data.columns)}")
+            return None, None
 
+    # Normalisation des autres colonnes importantes
     for c in data.columns:
         if "alpha_cabin" in c: data = data.rename(columns={c: "alpha_cabin"})
         elif "alpha_kundt" in c: data = data.rename(columns={c: "alpha_kundt"})
         elif "frequency" in c: data = data.rename(columns={c: "frequency"})
 
+    # Remplissage des cases vides (fusion des cellules Excel) et nettoyage
     data["stn"] = data["stn"].astype(str).replace({"nan": pd.NA, "None": pd.NA, "": pd.NA}).ffill().str.strip().str.upper()
     data = data[data["stn"].str.match(r'^E\d+.*', na=False)]
 
     for col in ["frequency", "alpha_cabin", "alpha_kundt"]:
-        if col in data.columns: data[col] = pd.to_numeric(data[col], errors="coerce")
+        if col in data.columns: 
+            data[col] = pd.to_numeric(data[col], errors="coerce")
 
     # --- MERGE ---
     merged = data.merge(gnrl, on="stn", how="left")
