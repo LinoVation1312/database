@@ -161,11 +161,15 @@ plot_data = fdf[fdf["curve_label"].isin(selected_labels)]
 tab1, tab2 = st.tabs(["📈 Graphique Interactif", "🗃️ Données Brutes & Exports"])
 
 with tab1:
-    # KPIs
+    # --- KPIs Sécurisés ---
     k1, k2, k3 = st.columns(3)
     k1.metric("Échantillons comparés", len(selected_labels))
-    k2.metric("Masse moyenne", f"{plot_data[mass_col].mean():.0f} g/m²" if pd.notna(plot_data[mass_col].mean()) else "N/A")
-    k3.metric("Épaisseur moyenne", f"{plot_data['thickness_mm'].mean():.1f} mm" if pd.notna(plot_data['thickness_mm'].mean()) else "N/A")
+    
+    avg_mass = pd.to_numeric(plot_data[mass_col], errors="coerce").mean()
+    avg_thick = pd.to_numeric(plot_data['thickness_mm'], errors="coerce").mean()
+    
+    k2.metric("Masse moyenne", f"{avg_mass:.0f} g/m²" if pd.notna(avg_mass) else "N/A")
+    k3.metric("Épaisseur moyenne", f"{avg_thick:.1f} mm" if pd.notna(avg_thick) else "N/A")
     
     st.markdown("<br>", unsafe_allow_html=True)
     
@@ -178,8 +182,12 @@ with tab1:
 
     fig = go.Figure()
     for label in selected_labels:
-        sub = plot_data[plot_data["curve_label"] == label].sort_values("frequency").dropna(subset=["frequency", abs_type])
+        # CORRECTION BUG E0019 : on groupe par fréquence et on fait la moyenne pour éviter les doublons/zigzags
+        sub = plot_data[plot_data["curve_label"] == label].dropna(subset=["frequency", abs_type])
         if sub.empty: continue
+        
+        sub = sub.groupby("frequency", as_index=False)[abs_type].mean().sort_values("frequency")
+        
         fig.add_trace(go.Scatter(
             x=sub["frequency"], y=sub[abs_type],
             mode='lines+markers', name=label,
@@ -213,7 +221,11 @@ with tab1:
 with tab2:
     st.markdown("### Aperçu des données sélectionnées")
     show_cols = [c for c in ["stn", "curve_label", "frequency", abs_type] if c in plot_data.columns]
-    raw_output = plot_data[show_cols].sort_values(["stn", "frequency"])
+    
+    # On nettoie également le tableau de données brutes pour l'export (suppression des doublons)
+    raw_output = plot_data[show_cols].groupby(["stn", "curve_label", "frequency"], as_index=False)[abs_type].mean()
+    raw_output = raw_output.sort_values(["stn", "frequency"])
+    
     st.dataframe(raw_output, use_container_width=True, hide_index=True)
     
     csv = raw_output.to_csv(index=False).encode('utf-8')
