@@ -9,7 +9,7 @@ import re
 # ─────────────────────────────────────────────────────────────────
 # PAGE CONFIG
 # ─────────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Acoustic DB", page_icon="🔊", layout="wide")
+st.set_page_config(page_title="DATABASE", page_icon="🔊", layout="wide")
 
 st.markdown("""
 <style>
