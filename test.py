@@ -256,26 +256,14 @@ if df is None:
 # ─────────────────────────────────────────────────────────────────
 st.sidebar.header("🎛️ Global Filters")
 
-# ── Reference samples: pin toggle ──
-ref_labels_all = sorted(df[df["is_ref"]]["curve_label"].dropna().unique().tolist())
-n_refs = len(ref_labels_all)
-pin_refs = False
-if n_refs > 0:
-    pin_refs = st.sidebar.toggle(
-        f"📌 Pin References ({n_refs})",
-        value=False,
-        help="Always display reference curves regardless of other filters"
-    )
-    st.sidebar.markdown("---")
-
-# ── Sample-type filter (excludes REF from the radio) ──
+# ── Sample-type filter (REF always visible regardless) ──
 n_comp   = int(df[~df["is_ref"]].groupby("stn")["is_composite"].first().sum())
 n_single = int((~df[~df["is_ref"]].groupby("stn")["is_composite"].first()).sum())
 sample_type = st.sidebar.radio(
     "Sample Type",
     ["All", "Single Layer Only", "Composite Only"],
     index=0,
-    help=f"{n_comp} composite · {n_single} single-layer  (REF samples handled separately)"
+    help=f"{n_comp} composite · {n_single} single-layer"
 )
 st.sidebar.markdown("---")
 
@@ -293,7 +281,8 @@ mass_range   = st.sidebar.slider("Surface Mass (g/m²)", m_min, m_max, (m_min, m
 t_min, t_max = float(non_ref["thickness_mm"].min(skipna=True) or 0), float(non_ref["thickness_mm"].max(skipna=True) or 100)
 thick_range  = st.sidebar.slider("Thickness (mm)", t_min, t_max, (t_min, t_max))
 
-# ── Apply filters (REF rows bypass mass/thickness sliders) ──
+# ── Apply filters ──
+# Non-REF samples go through all filters; REF rows bypass numeric filters
 fdf_samples = df[~df["is_ref"]].copy()
 if sample_type == "Single Layer Only":
     fdf_samples = fdf_samples[~fdf_samples["is_composite"]]
@@ -304,12 +293,18 @@ if sup_sel:  fdf_samples = fdf_samples[fdf_samples["material_supplier"].isin(sup
 fdf_samples = fdf_samples[fdf_samples[mass_col].between(*mass_range) | fdf_samples[mass_col].isna()]
 fdf_samples = fdf_samples[fdf_samples["thickness_mm"].between(*thick_range) | fdf_samples["thickness_mm"].isna()]
 
-fdf = fdf_samples  # working frame (refs added back below when needed)
+# REF samples always present in the pool — users pick them from the same list
+fdf_refs = df[df["is_ref"]]
+fdf      = pd.concat([fdf_samples, fdf_refs], ignore_index=True)
 
 st.sidebar.markdown("---")
-available_labels = sorted(fdf["curve_label"].dropna().unique().tolist())
-select_all       = st.sidebar.checkbox("Select All Samples", value=False)
-selected_labels  = st.sidebar.multiselect(
+# REF labels sorted to the top so they're easy to find
+ref_labels     = sorted(fdf[fdf["is_ref"]]["curve_label"].dropna().unique().tolist())
+sample_labels  = sorted(fdf[~fdf["is_ref"]]["curve_label"].dropna().unique().tolist())
+available_labels = ref_labels + sample_labels   # refs first
+
+select_all      = st.sidebar.checkbox("Select All Samples", value=False)
+selected_labels = st.sidebar.multiselect(
     f"Select Samples ({len(available_labels)} available)",
     available_labels,
     default=available_labels if select_all else []
@@ -326,18 +321,13 @@ st.sidebar.markdown(
 
 abs_type = st.sidebar.radio("Measurement Method", ["alpha_cabin", "alpha_kundt"])
 
-# Build final label list: selected samples + pinned refs
-pinned_ref_labels = ref_labels_all if pin_refs else []
-all_active_labels = list(dict.fromkeys(selected_labels + pinned_ref_labels))  # preserve order, dedupe
+all_active_labels = selected_labels
 
 if not all_active_labels:
     st.warning("👈 Select at least one sample from the sidebar to generate the charts.")
     st.stop()
 
-# Combine filtered samples + REF rows for plotting
-fdf_refs   = df[df["is_ref"]]
-plot_data  = pd.concat([fdf, fdf_refs], ignore_index=True)
-plot_data  = plot_data[plot_data["curve_label"].isin(all_active_labels)]
+plot_data = fdf[fdf["curve_label"].isin(all_active_labels)]
 
 # ─────────────────────────────────────────────────────────────────
 # TABS
@@ -368,10 +358,9 @@ with tab1:
         )
     if n_sel_ref > 0:
         ref_names = [l.lstrip("★").strip() for l in all_active_labels if l.startswith("★")]
-        pin_note  = " (pinned)" if pin_refs else ""
         st.markdown(
             f'<div class="ref-info-box">'
-            f'<b>📌 Reference curves{pin_note}:</b> {", ".join(ref_names)}<br>'
+            f'<b>📌 Reference curves:</b> {", ".join(ref_names)}<br>'
             f'<span style="opacity:.8">Benchmark data — shown as <b>bold gold lines</b>.</span>'
             f'</div>', unsafe_allow_html=True
         )
