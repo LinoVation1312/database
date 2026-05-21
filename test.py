@@ -9,7 +9,6 @@ import base64
 # ─────────────────────────────────────────────────────────────────
 # CONFIGURATION GITHUB
 # ─────────────────────────────────────────────────────────────────
-# Remplissez vos informations ici ou utilisez les secrets Streamlit
 GITHUB_USER = "LinoVation1312"
 GITHUB_REPO = "database"
 BRANCH = "main"
