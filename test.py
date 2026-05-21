@@ -10,21 +10,78 @@ import base64
 # CONFIGURATION GITHUB
 # ─────────────────────────────────────────────────────────────────
 # Remplissez vos informations ici ou utilisez les secrets Streamlit
-GITHUB_USER = "VOTRE_NOM_UTILISATEUR_GITHUB"
-GITHUB_REPO = "VOTRE_NOM_DE_DEPOT"
-FILE_PATH = "Database_V3.xlsx"  # Chemin du fichier dans le dépôt
+GITHUB_USER = "LinoVation1312"
+GITHUB_REPO = "database"
 BRANCH = "main"
 
 # Récupération du token sécurisé depuis les Secrets Streamlit Cloud
-# En local, vous pouvez le mettre dans .streamlit/secrets.toml : GITHUB_TOKEN = "your_token"
 if "GITHUB_TOKEN" in st.secrets:
     TOKEN = st.secrets["GITHUB_TOKEN"]
 else:
     TOKEN = None
 
-# URLs GitHub API et Raw
-RAW_URL = f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/{BRANCH}/{FILE_PATH}"
-API_URL = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{FILE_PATH}"
+# Headers pour l'API GitHub
+headers = {"Authorization": f"token {TOKEN}", "Accept": "application/vnd.github.v3+json"} if TOKEN else {}
+
+# ─────────────────────────────────────────────────────────────────
+# FONCTIONS RECHERCHE / LECTURE / ÉCRITURE GITHUB
+# ─────────────────────────────────────────────────────────────────
+@st.cache_data(ttl=60)
+def find_and_download_current_file():
+    """Cherche automatiquement un fichier commençant par 'Database_V' sur GitHub et le télécharge"""
+    contents_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/"
+    try:
+        res = requests.get(contents_url, headers=headers)
+        if res.status_code == 200:
+            files = res.json()
+            # Recherche d'un fichier qui match le pattern (ex: Database_V3.xlsx)
+            for f in files:
+                if f["name"].lower().startswith("database_v") and f["name"].lower().endswith(".xlsx"):
+                    # Téléchargement du contenu brut via l'URL download_url
+                    file_res = requests.get(f["download_url"], headers=headers)
+                    if file_res.status_code == 200:
+                        return f["name"], file_res.content
+        return None, None
+    except Exception as e:
+        return None, None
+
+def upload_new_excel_to_github(new_filename, file_bytes):
+    """Supprime l'ancien fichier Database_V et crée le nouveau sur GitHub"""
+    contents_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/"
+    
+    if not TOKEN:
+        st.error("❌ Le jeton GITHUB_TOKEN est manquant dans les secrets de l'application.")
+        return False
+
+    try:
+        # 1. Rechercher et supprimer l'ancien fichier s'il existe
+        res = requests.get(contents_url, headers=headers)
+        if res.status_code == 200:
+            for f in res.json():
+                if f["name"].lower().startswith("database_v") and f["name"].lower().endswith(".xlsx"):
+                    # Requête de suppression de l'ancien fichier
+                    delete_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{f['name']}"
+                    del_data = {
+                        "message": f"Suppression de l'ancienne version {f['name']} via Streamlit",
+                        "sha": f["sha"],
+                        "branch": BRANCH
+                    }
+                    requests.delete(delete_url, headers=headers, json=del_data)
+
+        # 2. Enclencher l'encodage et l'envoi du nouveau fichier
+        upload_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{new_filename}"
+        content_b64 = base64.b64encode(file_bytes).decode("utf-8")
+        put_data = {
+            "message": f"Mise à jour base de données : {new_filename} via Streamlit",
+            "content": content_b64,
+            "branch": BRANCH
+        }
+        
+        put_res = requests.put(upload_url, headers=headers, json=put_data)
+        return put_res.status_code in [200, 201]
+    except Exception as e:
+        st.error(f"Erreur lors de la synchronisation GitHub : {e}")
+        return False
 
 # ─────────────────────────────────────────────────────────────────
 # PAGE CONFIGURATION
@@ -37,104 +94,27 @@ st.markdown("""
     [data-testid="stSidebar"] * { color: #e8e8e8 !important; }
     .stMetric { background-color: #1e212b; padding: 15px; border-radius: 10px; border: 1px solid #333; width: fit-content; }
     h1 { color: #3b82f6 !important; font-weight: 800 !important; }
-    .composite-info-box {
-        background-color: #1a1f2e;
-        border-left: 4px solid #7c3aed;
-        border-radius: 6px;
-        padding: 10px 14px;
-        margin-bottom: 10px;
-        font-size: 0.85em;
-        color: #c4b5fd;
-    }
-    .ref-info-box {
-        background-color: #1c1a10;
-        border-left: 4px solid #f59e0b;
-        border-radius: 6px;
-        padding: 10px 14px;
-        margin-bottom: 10px;
-        font-size: 0.85em;
-        color: #fcd34d;
-    }
+    .composite-info-box { background-color: #1a1f2e; border-left: 4px solid #7c3aed; border-radius: 6px; padding: 10px 14px; margin-bottom: 10px; font-size: 0.85em; color: #c4b5fd; }
+    .ref-info-box { background-color: #1c1a10; border-left: 4px solid #f59e0b; border-radius: 6px; padding: 10px 14px; margin-bottom: 10px; font-size: 0.85em; color: #fcd34d; }
 </style>
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────
-# FONCTIONS GITHUB (LECTURE / ÉCRITURE)
-# ─────────────────────────────────────────────────────────────────
-@st.cache_data(ttl=60) # Cache de 60 secondes pour éviter de bloquer l'application
-def download_excel_from_github():
-    """Télécharge le fichier Excel depuis le GitHub public ou privé (si token fourni)"""
-    headers = {}
-    if TOKEN:
-        headers["Authorization"] = f"token {TOKEN}"
-    
-    response = requests.get(RAW_URL, headers=headers)
-    if response.status_code == 200:
-        return response.content
-    else:
-        return None
-
-def upload_excel_to_github(file_bytes):
-    """Met à jour le fichier Excel sur GitHub en faisant un commit automatique via l'API"""
-    if not TOKEN:
-        st.error("❌ Le jeton GITHUB_TOKEN est manquant dans les secrets de l'application.")
-        return False
-        
-    headers = {
-        "Authorization": f"token {TOKEN}",
-        "Accept": "application/vnd.github.v3+json"
-    }
-    
-    # 1. On doit récupérer le 'sha' du fichier existant pour pouvoir le remplacer
-    res = requests.get(API_URL, headers=headers)
-    sha = None
-    if res.status_code == 200:
-        sha = res.json().get("sha")
-        
-    # 2. Encodage du nouveau fichier en base64
-    content_b64 = base64.b64encode(file_bytes).decode("utf-8")
-    
-    # 3. Préparation de la requête de mise à jour
-    data = {
-        "message": "Mise à jour de la base de données via Streamlit App",
-        "content": content_b64,
-        "branch": BRANCH
-    }
-    if sha:
-        data["sha"] = sha
-        
-    # 4. Envoi de la modification
-    put_res = requests.put(API_URL, headers=headers, json=data)
-    if put_res.status_code in [200, 201]:
-        return True
-    else:
-        st.error(f"Erreur API GitHub : {put_res.text}")
-        return False
-
-# ─────────────────────────────────────────────────────────────────
-# HELPER FUNCTIONS (Inchangé)
+# HELPER FUNCTIONS (Logique de parsing inchangée)
 # ─────────────────────────────────────────────────────────────────
 def norm_cols(cols):
-    return (cols.str.strip().str.lower()
-            .str.replace(r'[^\w\s]', '', regex=True)
-            .str.replace(r'\s+', '_', regex=True))
+    return (cols.str.strip().str.lower().str.replace(r'[^\w\s]', '', regex=True).str.replace(r'\s+', '_', regex=True))
 
-MATERIAL_MAP = [
-    (r'\bGlass\s*[Ff]iber\b', 'GF'), (r'\bPANox\b|\bPANOX\b', 'PANox'),
-    (r'\bPES\b', 'PES'), (r'\bPET\b', 'PET'), (r'\bPP\b', 'PP')
-]
-
+MATERIAL_MAP = [(r'\bGlass\s*[Ff]iber\b', 'GF'), (r'\bPANox\b|\bPANOX\b', 'PANox'), (r'\bPES\b', 'PES'), (r'\bPET\b', 'PET'), (r'\bPP\b', 'PP')]
 STN_PATTERN = r'^(E\d+|REF\s+\S.*)$'
 
 def parse_materials(description: str) -> str:
     if not isinstance(description, str): return "?"
-    hits = [(m.start(), label) for pattern, label in MATERIAL_MAP
-            for m in re.finditer(pattern, description, re.IGNORECASE)]
+    hits = [(m.start(), label) for pattern, label in MATERIAL_MAP for m in re.finditer(pattern, description, re.IGNORECASE)]
     hits.sort(key=lambda x: x[0])
     seen, found = set(), []
     for _, label in hits:
-        if label not in seen:
-            seen.add(label); found.append(label)
+        if label not in seen: seen.add(label); found.append(label)
     return "+".join(found) if found else "?"
 
 def parse_airgap(text: str):
@@ -165,8 +145,7 @@ def parse_composite_layers(description: str, mass_col_val):
     def layer_info(text, fallback_mass=None):
         mats = parse_materials(text)
         mass_m = re.search(r'(\d[\d,]*)\s*(?:gsm|gm|g/m²|g/m2)', text, re.IGNORECASE)
-        mass = (mass_m.group(1).replace(",", "") if mass_m
-                else (str(int(float(fallback_mass))) if pd.notna(fallback_mass) else "?"))
+        mass = (mass_m.group(1).replace(",", "") if mass_m else (str(int(float(fallback_mass))) if pd.notna(fallback_mass) else "?"))
         thick_m = re.search(r'(\d+(?:[.,]\d+)?)\s*mm', text, re.IGNORECASE)
         thick = thick_m.group(1) if thick_m else None
         label = f"{mats}  {mass} gsm"
@@ -201,7 +180,7 @@ def build_curve_label(row: pd.Series, mass_col: str) -> str:
     return f"{stn} | {mat} | {mass_str} | {thick_str}{ag_str}"
 
 # ─────────────────────────────────────────────────────────────────
-# DATA LOADING & CLEANING (Inchangé sauf entrée bytes)
+# DATA LOADING & CLEANING
 # ─────────────────────────────────────────────────────────────────
 def load_data(file_bytes: bytes):
     buf = io.BytesIO(file_bytes)
@@ -211,39 +190,27 @@ def load_data(file_bytes: bytes):
     data_sheet = next((s for s in xf.sheet_names if s.strip().upper() == "DATA"), None)
 
     if not gnrl_sheet or not data_sheet:
-        st.error("❌ Sheets 'GNRL' or 'DATA' not found in the workbook.")
+        st.error("❌ Les feuilles 'GNRL' ou 'DATA' sont introuvables.")
         return None, None
 
     raw = pd.read_excel(buf, sheet_name=gnrl_sheet, engine="openpyxl", header=None)
-    header_row = next(
-        (i for i, r in raw.iterrows()
-         if any("sample" in str(v).lower() or "stn" in str(v).lower() for v in r if pd.notna(v))),
-        None
-    )
-    if header_row is None:
-        st.error("❌ Header row could not be identified in the GNRL sheet.")
-        return None, None
+    header_row = next((i for i, r in raw.iterrows() if any("sample" in str(v).lower() or "stn" in str(v).lower() for v in r if pd.notna(v))), None)
+    if header_row is None: return None, None
 
     gnrl = pd.read_excel(buf, sheet_name=gnrl_sheet, engine="openpyxl", header=header_row)
     gnrl.columns = norm_cols(gnrl.columns)
     gnrl = gnrl.dropna(how="all")
 
     stn_cols = [c for c in gnrl.columns if "stn" in c or "sample" in c]
-    if not stn_cols:
-        st.error(f"❌ STN column not found in GNRL sheet.")
-        return None, None
+    if not stn_cols: return None, None
 
-    short_col = next(
-        (c for c in stn_cols if gnrl[c].dropna().astype(str).str.strip().str.match(r'^E\d+').mean() > 0.4),
-        stn_cols[-1]
-    )
+    short_col = next((c for c in stn_cols if gnrl[c].dropna().astype(str).str.strip().str.match(r'^E\d+').mean() > 0.4), stn_cols[-1])
     gnrl = gnrl.rename(columns={short_col: "stn"})
     gnrl["stn"] = gnrl["stn"].astype(str).str.strip().str.upper()
     gnrl = gnrl[gnrl["stn"].str.match(STN_PATTERN, na=False)]
 
     mass_col = next((c for c in gnrl.columns if "surface_mass" in c), None)
-    if mass_col:
-        gnrl[mass_col] = pd.to_numeric(gnrl[mass_col], errors="coerce")
+    if mass_col: gnrl[mass_col] = pd.to_numeric(gnrl[mass_col], errors="coerce")
     gnrl["thickness_mm"] = pd.to_numeric(gnrl.get("thickness_mm"), errors="coerce")
 
     gnrl["is_ref"]       = gnrl.apply(is_ref, axis=1)
@@ -262,9 +229,7 @@ def load_data(file_bytes: bytes):
         elif "alpha_kundt" in c: data = data.rename(columns={c: "alpha_kundt"})
         elif "frequency"   in c: data = data.rename(columns={c: "frequency"})
 
-    data["stn"] = (data["stn"].astype(str)
-                   .replace({"nan": pd.NA, "None": pd.NA, "": pd.NA})
-                   .ffill().str.strip().str.upper())
+    data["stn"] = (data["stn"].astype(str).replace({"nan": pd.NA, "None": pd.NA, "": pd.NA}).ffill().str.strip().str.upper())
     data = data[data["stn"].str.match(STN_PATTERN, na=False)]
 
     for col in ["frequency", "alpha_cabin", "alpha_kundt"]:
@@ -277,51 +242,49 @@ def load_data(file_bytes: bytes):
     return merged, mass_col
 
 # ─────────────────────────────────────────────────────────────────
-# MAIN UI
+# MAIN UI & CHARGEMENT DYNAMIQUE
 # ─────────────────────────────────────────────────────────────────
 st.title("🔊 DATABASE")
 
-# --- ZONE ADMINISTRATION (Gestion de la base de données) ---
-with st.sidebar.expander("🔄 Base de données GitHub", expanded=False):
-    uploaded_file = st.file_uploader("Écraser la base actuelle (Excel)", type=["xlsx"])
+# --- CHARGEMENT DE LA VERSION ACTUELLE VIA GITHUB API ---
+current_filename, excel_data = find_and_download_current_file()
+
+# --- BLOC ADMINISTRATION : RE-UPLOAD D'UNE VERSION (EX: Database_V4.xlsx) ---
+with st.sidebar.expander("🔄 Administration GitHub", expanded=False):
+    uploaded_file = st.file_uploader("Uploader une nouvelle version", type=["xlsx"], help="Le fichier doit obligatoirement s'appeler 'Database_Vx.xlsx'")
     if uploaded_file:
         file_bytes = uploaded_file.read()
-        if st.button("🚀 Pousser sur GitHub"):
-            with st.spinner("Téléversement sur GitHub en cours..."):
-                success = upload_excel_to_github(file_bytes)
-                if success:
-                    st.success("✅ Fichier mis à jour ! Actualisation...")
-                    st.cache_data.clear() # On vide le cache pour forcer la relecture
-                    st.rerun()
+        filename_uploaded = uploaded_file.name
+        
+        if not filename_uploaded.lower().startswith("database_v"):
+            st.error("⚠️ Le nom du fichier doit impérativement commencer par 'Database_V'")
+        else:
+            if st.button("🚀 Écraser et publier la version"):
+                with st.spinner("Mise à jour sur GitHub..."):
+                    if upload_new_excel_to_github(filename_uploaded, file_bytes):
+                        st.success(f"✅ Déployé avec succès : {filename_uploaded}")
+                        st.cache_data.clear()
+                        st.rerun()
 
-# --- CHARGEMENT AUTOMATIQUE ---
-excel_data = download_excel_from_github()
-
+# --- GESTION DES ERREURS DE CHARGEMENT INITIAL ---
 if excel_data is None:
-    st.error("❌ Impossible de charger le fichier depuis GitHub. Vérifiez la configuration ou uploadez un fichier manuellement ci-dessous.")
-    uploaded_file_fallback = st.file_uploader("Fichier de secours", type=["xlsx"])
-    if uploaded_file_fallback:
-        excel_data = uploaded_file_fallback.read()
-    else:
-        st.stop()
-
-df, mass_col = load_data(excel_data)
-if df is None:
+    st.error("❌ Aucun fichier commençant par 'Database_V' n'a été trouvé sur GitHub.")
+    st.info("Veuillez utiliser le module d'Administration dans la barre latérale pour initialiser la base.")
     st.stop()
 
+# Notification discrète de la version lue
+st.caption(f"📂 Base de données active lue sur GitHub : `{current_filename}`")
+
+df, mass_col = load_data(excel_data)
+if df is None: st.stop()
+
 # ─────────────────────────────────────────────────────────────────
-# SIDEBAR FILTERS
+# SIDEBAR FILTERS (Inchangé)
 # ─────────────────────────────────────────────────────────────────
 st.sidebar.header("🎛️ Global Filters")
-
 n_comp   = int(df[~df["is_ref"]].groupby("stn")["is_composite"].first().sum())
 n_single = int((~df[~df["is_ref"]].groupby("stn")["is_composite"].first()).sum())
-sample_type = st.sidebar.radio(
-    "Sample Type",
-    ["All", "Single Layer Only", "Composite Only"],
-    index=0,
-    help=f"{n_comp} composite · {n_single} single-layer"
-)
+sample_type = st.sidebar.radio("Sample Type", ["All", "Single Layer Only", "Composite Only"], index=0, help=f"{n_comp} composite · {n_single} single-layer")
 st.sidebar.markdown("---")
 
 trim_sel = (st.sidebar.multiselect("Trim Level", sorted(df["trim_level"].dropna().unique())) if "trim_level" in df.columns else [])
@@ -347,15 +310,11 @@ fdf      = pd.concat([fdf_samples, fdf_refs], ignore_index=True)
 
 st.sidebar.markdown("---")
 ref_labels       = sorted(fdf[fdf["is_ref"]]["curve_label"].dropna().unique().tolist())
-sample_labels  = sorted(fdf[~fdf["is_ref"]]["curve_label"].dropna().unique().tolist())
+sample_labels    = sorted(fdf[~fdf["is_ref"]]["curve_label"].dropna().unique().tolist())
 available_labels = ref_labels + sample_labels
 
 select_all      = st.sidebar.checkbox("Select All Samples", value=False)
-selected_labels = st.sidebar.multiselect(
-    f"Select Samples ({len(available_labels)} available)",
-    available_labels,
-    default=available_labels if select_all else []
-)
+selected_labels = st.sidebar.multiselect(f"Select Samples ({len(available_labels)} available)", available_labels, default=available_labels if select_all else [])
 
 st.sidebar.markdown("<small><span style='color:#a78bfa'>⊕</span> composite — dashed line<br><span style='color:#fbbf24'>★</span> reference — bold gold line</small>", unsafe_allow_html=True)
 abs_type = st.sidebar.radio("Measurement Method", ["alpha_cabin", "alpha_kundt"])
@@ -368,16 +327,17 @@ if not all_active_labels:
 plot_data = fdf[fdf["curve_label"].isin(all_active_labels)]
 
 # ─────────────────────────────────────────────────────────────────
-# TABS (Tout le reste du tracé Plotly reste identique)
+# TABS & PLOT & ACCÈS TÉLÉCHARGEMENT DIRECT
 # ─────────────────────────────────────────────────────────────────
 tab1, tab2 = st.tabs(["📈 Interactive Plot", "🗃️ Raw Data & Exports"])
 
 with tab1:
+    # (Le tracé Plotly reste identique à votre version initiale)
     n_sel_comp = sum(1 for l in all_active_labels if l.startswith("⊕"))
     n_sel_ref  = sum(1 for l in all_active_labels if l.startswith("★"))
     n_sel_sing = len(all_active_labels) - n_sel_comp - n_sel_ref
 
-    col_a, col_b, col_c, col_d = st.columns([1, 1, 1, 3])
+    col_a, col_b, col_c = st.columns([1, 1, 1])
     with col_a: st.metric("Samples", n_sel_sing + n_sel_comp)
     with col_b: st.metric("Composite", n_sel_comp)
     with col_c: st.metric("References", n_sel_ref)
@@ -385,11 +345,10 @@ with tab1:
 
     if n_sel_comp > 0:
         comp_stns = [l.split("|")[0].strip().lstrip("⊕").strip() for l in all_active_labels if l.startswith("⊕")]
-        st.markdown(f'<div class="composite-info-box"><b>🔀 Composite samples:</b> {", ".join(comp_stns)}<br><span style="opacity:.8">Two superimposed material layers — shown as <b>dashed lines</b>.</span></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="composite-info-box"><b>🔀 Composite samples:</b> {", ".join(comp_stns)}<br><span>Two superimposed material layers — shown as <b>dashed lines</b>.</span></div>', unsafe_allow_html=True)
     if n_sel_ref > 0:
-        ref_names = [l.lstrip("★").strip() for l in all_active_labels if l.lstrip("★").strip() in all_active_labels or True]
         ref_names = [l.lstrip("★").strip() for l in all_active_labels if l.startswith("★")]
-        st.markdown(f'<div class="ref-info-box"><b>📌 Reference curves:</b> {", ".join(ref_names)}<br><span style="opacity:.8">Benchmark data — shown as <b>bold gold lines</b>.</span></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="ref-info-box"><b>📌 Reference curves:</b> {", ".join(ref_names)}<br><span>Benchmark data — shown as <b>bold gold lines</b>.</span></div>', unsafe_allow_html=True)
 
     FREQ_TICKS = {
         "alpha_cabin": [315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300, 8000, 10000],
@@ -397,17 +356,16 @@ with tab1:
     }
     ticks = FREQ_TICKS.get(abs_type, sorted(plot_data["frequency"].dropna().unique()))
 
-    COLORS = ["#1D4ED8", "#E11D48", "#10B981", "#7C3AED", "#EA580C", "#06B6D4", "#EC4899", "#6B7280", "#84CC16", "#A16207", "#4F46E5", "#0F766E"]
-    REF_COLOR = "#F59E0B"
-
     fig = go.Figure()
     color_idx = 0
+    COLORS = ["#1D4ED8", "#E11D48", "#10B981", "#7C3AED", "#EA580C", "#06B6D4", "#EC4899", "#6B7280", "#84CC16", "#A16207", "#4F46E5", "#0F766E"]
+    REF_COLOR = "#F59E0B"
 
     for label in all_active_labels:
         sub = plot_data[plot_data["curve_label"] == label].dropna(subset=["frequency", abs_type])
         if sub.empty: continue
         sub = sub.groupby("frequency", as_index=False)[abs_type].mean().sort_values("frequency")
-
+        
         ref_curve  = label.startswith("★")
         comp_curve = label.startswith("⊕")
 
@@ -420,18 +378,9 @@ with tab1:
 
         fig.add_trace(go.Scatter(
             x=sub["frequency"], y=sub[abs_type], mode="lines+markers", name=label,
-            line=dict(color=color, width=line_width, dash=line_dash),
-            marker=dict(color=color, size=marker_sz, symbol=marker_sym),
+            line=dict(color=color, width=line_width, dash=line_dash), marker=dict(color=color, size=marker_sz, symbol=marker_sym),
             hovertemplate=f"<b>%{{fullData.name}}</b><br>Freq: %{{x}} Hz<br>α: %{{y:.3f}}{hover_tag}<extra></extra>"
         ))
-
-    legend_entries = []
-    if n_sel_sing > 0: legend_entries.append(("── Single layer", "solid", "rgba(200,200,200,0.7)"))
-    if n_sel_comp > 0: legend_entries.append(("╌╌ Composite (2 layers)", "dash", "rgba(200,200,200,0.7)"))
-    if n_sel_ref > 0: legend_entries.append(("── Reference", "solid", REF_COLOR))
-
-    for name, dash, col in legend_entries:
-        fig.add_trace(go.Scatter(x=[None], y=[None], mode="lines", line=dict(color=col, width=2.5 if "Reference" in name else 2, dash=dash), name=name, showlegend=True))
 
     fig.update_layout(
         title=f"Sound Absorption Coefficients ({abs_type.replace('_', ' ').title()})",
@@ -443,6 +392,16 @@ with tab1:
     st.plotly_chart(fig, use_container_width=True)
 
 with tab2:
+    # ── AJOUT DU BOUTON POUR TÉLÉCHARGER LE FICHIER GLOBAL DEPUIS GITHUB ──
+    st.markdown("### 📥 Télécharger le fichier source global")
+    st.download_button(
+        label=f"🟢 Télécharger le fichier complet actuellement en ligne ({current_filename})",
+        data=excel_data,
+        file_name=current_filename,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    st.markdown("---")
+
     st.markdown("### Screened Dataset")
     extra_cols = [c for c in ["is_ref", "is_composite"] if c in plot_data.columns]
     show_cols  = [c for c in ["stn", "curve_label"] + extra_cols + ["frequency", abs_type] if c in plot_data.columns]
