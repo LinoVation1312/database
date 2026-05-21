@@ -46,39 +46,61 @@ def find_and_download_current_file():
         return None, None
 
 def upload_new_excel_to_github(new_filename, file_bytes):
-    """Supprime l'ancien fichier Database_V et crée le nouveau sur GitHub"""
-    contents_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/"
-    
+    """Met à jour ou crée le nouveau fichier sur GitHub en gérant correctement le SHA"""
     if not TOKEN:
         st.error("❌ Le jeton GITHUB_TOKEN est manquant dans les secrets de l'application.")
         return False
 
+    contents_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/"
+    
     try:
-        # 1. Rechercher et supprimer l'ancien fichier s'il existe
+        existing_sha = None
+        old_filename_to_delete = None
+
+        # 1. Lister les fichiers pour voir s'il y a un fichier Database_V existant
         res = requests.get(contents_url, headers=headers, params={"t": pd.Timestamp.now().timestamp()})
         if res.status_code == 200:
             for f in res.json():
                 if f["name"].lower().startswith("database_v") and f["name"].lower().endswith(".xlsx"):
-                    # Requête de suppression de l'ancien fichier
-                    delete_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{f['name']}"
-                    del_data = {
-                        "message": f"Suppression de l'ancienne version {f['name']} via Streamlit",
-                        "sha": f["sha"],
-                        "branch": BRANCH
-                    }
-                    requests.delete(delete_url, headers=headers, json=del_data)
+                    if f["name"].lower() == new_filename.lower():
+                        # Même nom ! On récupère le SHA pour l'écraser directement
+                        existing_sha = f["sha"]
+                    else:
+                        # Nom différent (ex: passage de V1 à V2), on garde le nom pour le supprimer APRÈS
+                        old_filename_to_delete = f["name"]
+                        old_file_sha = f["sha"]
 
-        # 2. Enclencher l'encodage et l'envoi du nouveau fichier
+        # 2. Envoi / Écrasement du fichier cible
         upload_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{new_filename}"
         content_b64 = base64.b64encode(file_bytes).decode("utf-8")
+        
         put_data = {
             "message": f"Mise à jour base de données : {new_filename} via Streamlit",
             "content": content_b64,
             "branch": BRANCH
         }
-        
+        # Si le fichier existait déjà sous le même nom, on passe le SHA requis par GitHub
+        if existing_sha:
+            put_data["sha"] = existing_sha
+
         put_res = requests.put(upload_url, headers=headers, json=put_data)
-        return put_res.status_code in [200, 201]
+        
+        if put_res.status_code not in [200, 201]:
+            st.error(f"❌ Échec du push GitHub (Code {put_res.status_code}) : {put_res.text}")
+            return False
+
+        # 3. Si le nouveau fichier a bien été mis en place ET que l'ancien avait un nom différent, on nettoie l'ancien
+        if old_filename_to_delete:
+            delete_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{old_filename_to_delete}"
+            del_data = {
+                "message": f"Nettoyage ancienne version {old_filename_to_delete} après upgrade",
+                "sha": old_file_sha,
+                "branch": BRANCH
+            }
+            requests.delete(delete_url, headers=headers, json=del_data)
+
+        return True
+
     except Exception as e:
         st.error(f"Erreur lors de la synchronisation GitHub : {e}")
         return False
