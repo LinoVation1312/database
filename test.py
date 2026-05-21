@@ -388,6 +388,8 @@ plot_data = fdf[fdf["curve_label"].isin(all_active_labels)]
 tab1, tab2 = st.tabs(["📈 Interactive Plot", "🗃️ Raw Data & Exports"])
 
 with tab1:
+    import plotly.io as pio
+
     n_sel_comp = sum(1 for l in all_active_labels if l.startswith("⊕"))
     n_sel_ref  = sum(1 for l in all_active_labels if l.startswith("★"))
     n_sel_sing = len(all_active_labels) - n_sel_comp - n_sel_ref
@@ -398,19 +400,6 @@ with tab1:
     with col_c: st.metric("References", n_sel_ref)
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ... (info boxes, figure construction — inchangé) ...
-
-    st.plotly_chart(fig, width="stretch")
-
-    # ── Download curve as HTML ──────────────────────────────────────
-    import plotly.io as pio
-    html_bytes = pio.to_html(fig, include_plotlyjs="cdn", full_html=True).encode("utf-8")
-    st.download_button(
-        label="📥 Download chart as HTML",
-        data=html_bytes,
-        file_name="absorption_curves.html",
-        mime="text/html",
-    )
     if n_sel_comp > 0:
         comp_stns = [l.split("|")[0].strip().lstrip("⊕").strip() for l in all_active_labels if l.startswith("⊕")]
         st.markdown(f'<div class="composite-info-box"><b>🔀 Composite samples:</b> {", ".join(comp_stns)}<br><span>Two superimposed material layers — shown as <b>dashed lines</b>.</span></div>', unsafe_allow_html=True)
@@ -433,7 +422,7 @@ with tab1:
         sub = plot_data[plot_data["curve_label"] == label].dropna(subset=["frequency", abs_type])
         if sub.empty: continue
         sub = sub.groupby("frequency", as_index=False)[abs_type].mean().sort_values("frequency")
-        
+
         ref_curve  = label.startswith("★")
         comp_curve = label.startswith("⊕")
 
@@ -457,8 +446,16 @@ with tab1:
         hovermode="x unified", plot_bgcolor="#ffffff", paper_bgcolor="rgba(0,0,0,0)",
         legend=dict(orientation="h", yanchor="bottom", y=-0.35, xanchor="center", x=0.5), height=640
     )
+
     st.plotly_chart(fig, width="stretch")
 
+    html_bytes = pio.to_html(fig, include_plotlyjs="cdn", full_html=True).encode("utf-8")
+    st.download_button(
+        label="📥 Download chart as HTML",
+        data=html_bytes,
+        file_name="absorption_curves.html",
+        mime="text/html",
+    )
 with tab2:
     st.markdown("### 📥 Download Global Source File")
     st.download_button(
