@@ -30,14 +30,15 @@ def find_and_download_current_file():
     """Cherche automatiquement un fichier commençant par 'Database_V' sur GitHub et le télécharge"""
     contents_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/"
     try:
-        res = requests.get(contents_url, headers=headers)
+        # Ajout d'un paramètre d'URL dynamique pour bypasser le cache agressif de l'API GitHub
+        res = requests.get(contents_url, headers=headers, params={"t": pd.Timestamp.now().timestamp()})
         if res.status_code == 200:
             files = res.json()
             # Recherche d'un fichier qui match le pattern (ex: Database_V3.xlsx)
             for f in files:
                 if f["name"].lower().startswith("database_v") and f["name"].lower().endswith(".xlsx"):
                     # Téléchargement du contenu brut via l'URL download_url
-                    file_res = requests.get(f["download_url"], headers=headers)
+                    file_res = requests.get(f["download_url"], headers=headers, params={"t": pd.Timestamp.now().timestamp()})
                     if file_res.status_code == 200:
                         return f["name"], file_res.content
         return None, None
@@ -54,7 +55,7 @@ def upload_new_excel_to_github(new_filename, file_bytes):
 
     try:
         # 1. Rechercher et supprimer l'ancien fichier s'il existe
-        res = requests.get(contents_url, headers=headers)
+        res = requests.get(contents_url, headers=headers, params={"t": pd.Timestamp.now().timestamp()})
         if res.status_code == 200:
             for f in res.json():
                 if f["name"].lower().startswith("database_v") and f["name"].lower().endswith(".xlsx"):
@@ -185,9 +186,9 @@ def parse_composite_layers(description: str, mass_col_val):
     return l1, l2
 
 def build_curve_label(row: pd.Series, mass_col: str) -> str:
-    stn   = str(row.get("stn", "?")).strip()
-    desc  = str(row.get("detailed_description", ""))
-    mass  = row.get(mass_col)
+    stn  = str(row.get("stn", "?")).strip()
+    desc = str(row.get("detailed_description", ""))
+    mass = row.get(mass_col)
     thick = row.get("thickness_mm")
 
     if is_ref(row): return f"★ {stn}"
@@ -292,6 +293,8 @@ with st.sidebar.expander("🔄 Administration GitHub", expanded=False):
                     if upload_new_excel_to_github(filename_uploaded, file_bytes):
                         st.success(f"✅ Déployé avec succès : {filename_uploaded}")
                         st.cache_data.clear()
+                        import time
+                        time.sleep(1.5)  # Petit délai pour laisser à l'API GitHub le temps de se stabiliser
                         st.rerun()
 
 # --- GESTION DES ERREURS DE CHARGEMENT INITIAL ---
@@ -386,7 +389,7 @@ with tab1:
     fig = go.Figure()
     color_idx = 0
     COLORS = ["#1D4ED8", "#E11D48", "#10B981", "#7C3AED", "#EA580C", "#06B6D4", "#EC4899", "#6B7280", "#84CC16", "#A16207", "#4F46E5", "#0F766E"]
-    REF_COLOR = "#D97706"  # Version légèrement plus sombre du doré pour être contrasté sur fond blanc
+    REF_COLOR = "#D97706"
 
     for label in all_active_labels:
         sub = plot_data[plot_data["curve_label"] == label].dropna(subset=["frequency", abs_type])
@@ -409,7 +412,6 @@ with tab1:
             hovertemplate=f"<b>%{{fullData.name}}</b><br>Freq: %{{x}} Hz<br>α: %{{y:.3f}}{hover_tag}<extra></extra>"
         ))
 
-    # Forcer la grille de Plotly à apparaître de façon contrastée sur fond clair
     fig.update_layout(
         title=f"Sound Absorption Coefficients ({abs_type.replace('_', ' ').title()})",
         xaxis=dict(title="Frequency (Hz)", type="log", tickmode="array", tickvals=ticks, ticktext=[str(t) for t in ticks], showgrid=True, gridcolor="#e2e8f0"),
@@ -417,7 +419,7 @@ with tab1:
         hovermode="x unified", plot_bgcolor="#ffffff", paper_bgcolor="rgba(0,0,0,0)",
         legend=dict(orientation="h", yanchor="bottom", y=-0.35, xanchor="center", x=0.5), height=640
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 with tab2:
     st.markdown("### 📥 Télécharger le fichier source global")
@@ -436,6 +438,6 @@ with tab2:
     raw_output = plot_data[show_cols].groupby(grp_cols, as_index=False)[abs_type].mean().sort_values(["stn", "frequency"])
     raw_output = raw_output.rename(columns={"is_composite": "Composite", "is_ref": "Reference"})
 
-    st.dataframe(raw_output, use_container_width=True, hide_index=True)
+    st.dataframe(raw_output, width="stretch", hide_index=True)
     csv = raw_output.to_csv(index=False).encode("utf-8")
     st.download_button("📥 Export Current Table (.CSV)", csv, "filtered_data.csv", "text/csv")
