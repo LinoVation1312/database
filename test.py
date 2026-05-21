@@ -398,6 +398,19 @@ with tab1:
     with col_c: st.metric("References", n_sel_ref)
     st.markdown("<br>", unsafe_allow_html=True)
 
+    # ... (info boxes, figure construction — inchangé) ...
+
+    st.plotly_chart(fig, width="stretch")
+
+    # ── Download curve as HTML ──────────────────────────────────────
+    import plotly.io as pio
+    html_bytes = pio.to_html(fig, include_plotlyjs="cdn", full_html=True).encode("utf-8")
+    st.download_button(
+        label="📥 Download chart as HTML",
+        data=html_bytes,
+        file_name="absorption_curves.html",
+        mime="text/html",
+    )
     if n_sel_comp > 0:
         comp_stns = [l.split("|")[0].strip().lstrip("⊕").strip() for l in all_active_labels if l.startswith("⊕")]
         st.markdown(f'<div class="composite-info-box"><b>🔀 Composite samples:</b> {", ".join(comp_stns)}<br><span>Two superimposed material layers — shown as <b>dashed lines</b>.</span></div>', unsafe_allow_html=True)
