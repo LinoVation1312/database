@@ -7,37 +7,39 @@ import requests
 import base64
 
 # ─────────────────────────────────────────────────────────────────
-# CONFIGURATION GITHUB
+# GITHUB CONFIGURATION
 # ─────────────────────────────────────────────────────────────────
 GITHUB_USER = "LinoVation1312"
 GITHUB_REPO = "database"
 BRANCH = "master"
 
-# Récupération du token sécurisé depuis les Secrets Streamlit Cloud
+# Fetching the secure token from Streamlit Cloud Secrets
 if "GITHUB_TOKEN" in st.secrets:
     TOKEN = st.secrets["GITHUB_TOKEN"]
 else:
     TOKEN = None
 
-# Headers pour l'API GitHub
+# Headers for GitHub API
 headers = {"Authorization": f"token {TOKEN}", "Accept": "application/vnd.github.v3+json"} if TOKEN else {}
 
+# Flexible regex rule for file validation (case-insensitive)
+# Validates: Database_V1, database_v2, DATABASE-V3, Database V4, databasev5...
+FILENAME_REGEX = r"^database[-_\s]?v.*\.xlsx$"
+
 # ─────────────────────────────────────────────────────────────────
-# FONCTIONS RECHERCHE / LECTURE / ÉCRITURE GITHUB
+# GITHUB SEARCH / READ / WRITE FUNCTIONS
 # ─────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=60)
 def find_and_download_current_file():
-    """Cherche automatiquement un fichier commençant par 'Database_V' sur GitHub et le télécharge"""
+    """Automatically searches for a database file on GitHub (flexible on the name) and downloads it"""
     contents_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/"
     try:
-        # Ajout d'un paramètre d'URL dynamique pour bypasser le cache agressif de l'API GitHub
+        # Dynamic URL parameter to bypass GitHub API's aggressive caching
         res = requests.get(contents_url, headers=headers, params={"t": pd.Timestamp.now().timestamp()})
         if res.status_code == 200:
             files = res.json()
-            # Recherche d'un fichier qui match le pattern (ex: Database_V3.xlsx)
             for f in files:
-                if f["name"].lower().startswith("database_v") and f["name"].lower().endswith(".xlsx"):
-                    # Téléchargement du contenu brut via l'URL download_url
+                if re.match(FILENAME_REGEX, f["name"].lower()):
                     file_res = requests.get(f["download_url"], headers=headers, params={"t": pd.Timestamp.now().timestamp()})
                     if file_res.status_code == 200:
                         return f["name"], file_res.content
@@ -46,9 +48,9 @@ def find_and_download_current_file():
         return None, None
 
 def upload_new_excel_to_github(new_filename, file_bytes):
-    """Met à jour ou crée le nouveau fichier sur GitHub en gérant correctement le SHA"""
+    """Updates or creates the new file on GitHub, correctly managing the SHA"""
     if not TOKEN:
-        st.error("❌ Le jeton GITHUB_TOKEN est manquant dans les secrets de l'application.")
+        st.error("❌ The GITHUB_TOKEN is missing from the application secrets.")
         return False
 
     contents_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/"
@@ -57,43 +59,44 @@ def upload_new_excel_to_github(new_filename, file_bytes):
         existing_sha = None
         old_filename_to_delete = None
 
-        # 1. Lister les fichiers pour voir s'il y a un fichier Database_V existant
+        # 1. List files to see if a database file already exists
         res = requests.get(contents_url, headers=headers, params={"t": pd.Timestamp.now().timestamp()})
         if res.status_code == 200:
             for f in res.json():
-                if f["name"].lower().startswith("database_v") and f["name"].lower().endswith(".xlsx"):
+                if re.match(FILENAME_REGEX, f["name"].lower()):
                     if f["name"].lower() == new_filename.lower():
-                        # Même nom ! On récupère le SHA pour l'écraser directement
+                        # Same name! Fetch SHA to overwrite it directly
                         existing_sha = f["sha"]
+                        new_filename = f["name"] # Keep the existing file's casing if identical
                     else:
-                        # Nom différent (ex: passage de V1 à V2), on garde le nom pour le supprimer APRÈS
+                        # Different name (e.g., V1 to V2), keep track to delete it AFTER the upload
                         old_filename_to_delete = f["name"]
                         old_file_sha = f["sha"]
 
-        # 2. Envoi / Écrasement du fichier cible
+        # 2. Upload / Overwrite target file
         upload_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{new_filename}"
         content_b64 = base64.b64encode(file_bytes).decode("utf-8")
         
         put_data = {
-            "message": f"Mise à jour base de données : {new_filename} via Streamlit",
+            "message": f"Database update: {new_filename} via Streamlit",
             "content": content_b64,
             "branch": BRANCH
         }
-        # Si le fichier existait déjà sous le même nom, on passe le SHA requis par GitHub
+        # If the file already existed under the same name, pass the required SHA
         if existing_sha:
             put_data["sha"] = existing_sha
 
         put_res = requests.put(upload_url, headers=headers, json=put_data)
         
         if put_res.status_code not in [200, 201]:
-            st.error(f"❌ Échec du push GitHub (Code {put_res.status_code}) : {put_res.text}")
+            st.error(f"❌ GitHub push failed (Code {put_res.status_code}): {put_res.text}")
             return False
 
-        # 3. Si le nouveau fichier a bien été mis en place ET que l'ancien avait un nom différent, on nettoie l'ancien
+        # 3. Clean up the old file if the new file was successfully deployed with a different name
         if old_filename_to_delete:
             delete_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{old_filename_to_delete}"
             del_data = {
-                "message": f"Nettoyage ancienne version {old_filename_to_delete} après upgrade",
+                "message": f"Cleanup old version {old_filename_to_delete} after upgrade",
                 "sha": old_file_sha,
                 "branch": BRANCH
             }
@@ -102,31 +105,31 @@ def upload_new_excel_to_github(new_filename, file_bytes):
         return True
 
     except Exception as e:
-        st.error(f"Erreur lors de la synchronisation GitHub : {e}")
+        st.error(f"Error during GitHub synchronization: {e}")
         return False
 
 # ─────────────────────────────────────────────────────────────────
-# PAGE CONFIGURATION (Thème Clair appliqué)
+# PAGE CONFIGURATION (Light Theme applied)
 # ─────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="DATABASE", page_icon="🔊", layout="wide")
 
 st.markdown("""
 <style>
-    /* Style de la barre latérale - Thème Clair */
+    /* Sidebar Style - Light Theme */
     [data-testid="stSidebar"] { background-color: #f8fafc; border-right: 1px solid #e2e8f0; }
     [data-testid="stSidebar"] * { color: #0f172a !important; }
     
-    /* Boutons et éléments interactifs de la sidebar */
+    /* Sidebar interactive elements and buttons */
     [data-testid="stSidebar"] button { background-color: #ffffff !important; border: 1px solid #cbd5e1 !important; color: #0f172a !important; }
     
-    /* Métriques de l'interface globale */
+    /* Metrics UI boxes */
     .stMetric { background-color: #f1f5f9; padding: 15px; border-radius: 10px; border: 1px solid #e2e8f0; width: fit-content; }
     .stMetric * { color: #0f172a !important; }
     
-    /* Titre Principal */
+    /* Main Title */
     h1 { color: #1e40af !important; font-weight: 800 !important; }
     
-    /* Boîtes de notification composites */
+    /* Composite info notice boxes */
     .composite-info-box { 
         background-color: #f3e8ff; 
         border-left: 4px solid #7c3aed; 
@@ -137,7 +140,7 @@ st.markdown("""
         color: #5b21b6; 
     }
     
-    /* Boîtes de notification références */
+    /* Reference info notice boxes */
     .ref-info-box { 
         background-color: #fef3c7; 
         border-left: 4px solid #d97706; 
@@ -151,7 +154,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────
-# HELPER FUNCTIONS (Logique de parsing inchangée)
+# HELPER FUNCTIONS (Parsing logic)
 # ─────────────────────────────────────────────────────────────────
 def norm_cols(cols):
     return (cols.str.strip().str.lower().str.replace(r'[^\w\s]', '', regex=True).str.replace(r'\s+', '_', regex=True))
@@ -241,7 +244,7 @@ def load_data(file_bytes: bytes):
     data_sheet = next((s for s in xf.sheet_names if s.strip().upper() == "DATA"), None)
 
     if not gnrl_sheet or not data_sheet:
-        st.error("❌ Les feuilles 'GNRL' ou 'DATA' sont introuvables.")
+        st.error("❌ The 'GNRL' or 'DATA' sheets could not be found.")
         return None, None
 
     raw = pd.read_excel(buf, sheet_name=gnrl_sheet, engine="openpyxl", header=None)
@@ -293,40 +296,40 @@ def load_data(file_bytes: bytes):
     return merged, mass_col
 
 # ─────────────────────────────────────────────────────────────────
-# MAIN UI & CHARGEMENT DYNAMIQUE
+# MAIN UI & DYNAMIC LOADING
 # ─────────────────────────────────────────────────────────────────
 st.title("🔊 DATABASE")
 
-# --- CHARGEMENT DE LA VERSION ACTUELLE VIA GITHUB API ---
+# --- INITIAL LOAD VIA GITHUB API ---
 current_filename, excel_data = find_and_download_current_file()
 
-# --- BLOC ADMINISTRATION : RE-UPLOAD D'UNE VERSION (EX: Database_V4.xlsx) ---
-with st.sidebar.expander("🔄 Administration GitHub", expanded=False):
-    uploaded_file = st.file_uploader("Uploader une nouvelle version", type=["xlsx"], help="Le fichier doit obligatoirement s'appeler 'Database_Vx.xlsx'")
+# --- ADMIN PANEL : FILE RE-UPLOAD ---
+with st.sidebar.expander("🔄 GitHub Administration", expanded=False):
+    uploaded_file = st.file_uploader("Upload a new database file", type=["xlsx"], help="The filename must contain 'Database' followed by a version number (e.g. database_v2.xlsx, DATABASE-V3.xlsx)")
     if uploaded_file:
         file_bytes = uploaded_file.read()
         filename_uploaded = uploaded_file.name
         
-        if not filename_uploaded.lower().startswith("database_v"):
-            st.error("⚠️ Le nom du fichier doit impérativement commencer par 'Database_V'")
+        if not re.match(FILENAME_REGEX, filename_uploaded.lower()):
+            st.error("⚠️ Invalid filename! The name must contain 'Database' followed by a version indicator (e.g. Database_V4.xlsx, database-v2.xlsx)")
         else:
-            if st.button("🚀 Écraser et publier la version"):
-                with st.spinner("Mise à jour sur GitHub..."):
+            if st.button("🚀 Overwrite & Publish Version"):
+                with st.spinner("Uploading to GitHub..."):
                     if upload_new_excel_to_github(filename_uploaded, file_bytes):
-                        st.success(f"✅ Déployé avec succès : {filename_uploaded}")
+                        st.success(f"✅ Successfully deployed: {filename_uploaded}")
                         st.cache_data.clear()
                         import time
-                        time.sleep(1.5)  # Petit délai pour laisser à l'API GitHub le temps de se stabiliser
+                        time.sleep(1.5)  # Let GitHub API stabilize
                         st.rerun()
 
-# --- GESTION DES ERREURS DE CHARGEMENT INITIAL ---
+# --- ERROR HANDLING FOR UNINITIALIZED REPO ---
 if excel_data is None:
-    st.error("❌ Aucun fichier commençant par 'Database_V' n'a été trouvé sur GitHub.")
-    st.info("Veuillez utiliser le module d'Administration dans la barre latérale pour initialiser la base.")
+    st.error("❌ No valid database file (e.g. 'Database_V1.xlsx') was found on GitHub.")
+    st.info("Please use the Administration module in the sidebar to initialize the database.")
     st.stop()
 
-# Notification discrète de la version lue
-st.caption(f"📂 Base de données active lue sur GitHub : `{current_filename}`")
+# Active active database info tag
+st.caption(f"📂 Active database loaded from GitHub: `{current_filename}`")
 
 df, mass_col = load_data(excel_data)
 if df is None: st.stop()
@@ -380,7 +383,7 @@ if not all_active_labels:
 plot_data = fdf[fdf["curve_label"].isin(all_active_labels)]
 
 # ─────────────────────────────────────────────────────────────────
-# TABS & PLOT & ACCÈS TÉLÉCHARGEMENT DIRECT
+# TABS & PLOT & DIRECT DATA EXPORT
 # ─────────────────────────────────────────────────────────────────
 tab1, tab2 = st.tabs(["📈 Interactive Plot", "🗃️ Raw Data & Exports"])
 
@@ -444,9 +447,9 @@ with tab1:
     st.plotly_chart(fig, width="stretch")
 
 with tab2:
-    st.markdown("### 📥 Télécharger le fichier source global")
+    st.markdown("### 📥 Download Global Source File")
     st.download_button(
-        label=f"🟢 Télécharger le fichier complet actuellement en ligne ({current_filename})",
+        label=f"🟢 Download complete file currently online ({current_filename})",
         data=excel_data,
         file_name=current_filename,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
