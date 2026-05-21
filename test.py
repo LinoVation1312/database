@@ -11,7 +11,7 @@ import base64
 # ─────────────────────────────────────────────────────────────────
 GITHUB_USER = "LinoVation1312"
 GITHUB_REPO = "database"
-BRANCH = "main"
+BRANCH = "master"
 
 # Récupération du token sécurisé depuis les Secrets Streamlit Cloud
 if "GITHUB_TOKEN" in st.secrets:
