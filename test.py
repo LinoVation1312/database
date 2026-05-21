@@ -83,18 +83,47 @@ def upload_new_excel_to_github(new_filename, file_bytes):
         return False
 
 # ─────────────────────────────────────────────────────────────────
-# PAGE CONFIGURATION
+# PAGE CONFIGURATION (Thème Clair appliqué)
 # ─────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="DATABASE", page_icon="🔊", layout="wide")
 
 st.markdown("""
 <style>
-    [data-testid="stSidebar"] { background-color: #0f1117; }
-    [data-testid="stSidebar"] * { color: #e8e8e8 !important; }
-    .stMetric { background-color: #1e212b; padding: 15px; border-radius: 10px; border: 1px solid #333; width: fit-content; }
-    h1 { color: #3b82f6 !important; font-weight: 800 !important; }
-    .composite-info-box { background-color: #1a1f2e; border-left: 4px solid #7c3aed; border-radius: 6px; padding: 10px 14px; margin-bottom: 10px; font-size: 0.85em; color: #c4b5fd; }
-    .ref-info-box { background-color: #1c1a10; border-left: 4px solid #f59e0b; border-radius: 6px; padding: 10px 14px; margin-bottom: 10px; font-size: 0.85em; color: #fcd34d; }
+    /* Style de la barre latérale - Thème Clair */
+    [data-testid="stSidebar"] { background-color: #f8fafc; border-right: 1px solid #e2e8f0; }
+    [data-testid="stSidebar"] * { color: #0f172a !important; }
+    
+    /* Boutons et éléments interactifs de la sidebar */
+    [data-testid="stSidebar"] button { background-color: #ffffff !important; border: 1px solid #cbd5e1 !important; color: #0f172a !important; }
+    
+    /* Métriques de l'interface globale */
+    .stMetric { background-color: #f1f5f9; padding: 15px; border-radius: 10px; border: 1px solid #e2e8f0; width: fit-content; }
+    .stMetric * { color: #0f172a !important; }
+    
+    /* Titre Principal */
+    h1 { color: #1e40af !important; font-weight: 800 !important; }
+    
+    /* Boîtes de notification composites */
+    .composite-info-box { 
+        background-color: #f3e8ff; 
+        border-left: 4px solid #7c3aed; 
+        border-radius: 6px; 
+        padding: 10px 14px; 
+        margin-bottom: 10px; 
+        font-size: 0.85em; 
+        color: #5b21b6; 
+    }
+    
+    /* Boîtes de notification références */
+    .ref-info-box { 
+        background-color: #fef3c7; 
+        border-left: 4px solid #d97706; 
+        border-radius: 6px; 
+        padding: 10px 14px; 
+        margin-bottom: 10px; 
+        font-size: 0.85em; 
+        color: #92400e; 
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -278,7 +307,7 @@ df, mass_col = load_data(excel_data)
 if df is None: st.stop()
 
 # ─────────────────────────────────────────────────────────────────
-# SIDEBAR FILTERS (Inchangé)
+# SIDEBAR FILTERS
 # ─────────────────────────────────────────────────────────────────
 st.sidebar.header("🎛️ Global Filters")
 n_comp   = int(df[~df["is_ref"]].groupby("stn")["is_composite"].first().sum())
@@ -315,7 +344,7 @@ available_labels = ref_labels + sample_labels
 select_all      = st.sidebar.checkbox("Select All Samples", value=False)
 selected_labels = st.sidebar.multiselect(f"Select Samples ({len(available_labels)} available)", available_labels, default=available_labels if select_all else [])
 
-st.sidebar.markdown("<small><span style='color:#a78bfa'>⊕</span> composite — dashed line<br><span style='color:#fbbf24'>★</span> reference — bold gold line</small>", unsafe_allow_html=True)
+st.sidebar.markdown("<small><span style='color:#7c3aed'>⊕</span> composite — dashed line<br><span style='color:#d97706'>★</span> reference — bold gold line</small>", unsafe_allow_html=True)
 abs_type = st.sidebar.radio("Measurement Method", ["alpha_cabin", "alpha_kundt"])
 
 all_active_labels = selected_labels
@@ -331,7 +360,6 @@ plot_data = fdf[fdf["curve_label"].isin(all_active_labels)]
 tab1, tab2 = st.tabs(["📈 Interactive Plot", "🗃️ Raw Data & Exports"])
 
 with tab1:
-    # (Le tracé Plotly reste identique à votre version initiale)
     n_sel_comp = sum(1 for l in all_active_labels if l.startswith("⊕"))
     n_sel_ref  = sum(1 for l in all_active_labels if l.startswith("★"))
     n_sel_sing = len(all_active_labels) - n_sel_comp - n_sel_ref
@@ -358,7 +386,7 @@ with tab1:
     fig = go.Figure()
     color_idx = 0
     COLORS = ["#1D4ED8", "#E11D48", "#10B981", "#7C3AED", "#EA580C", "#06B6D4", "#EC4899", "#6B7280", "#84CC16", "#A16207", "#4F46E5", "#0F766E"]
-    REF_COLOR = "#F59E0B"
+    REF_COLOR = "#D97706"  # Version légèrement plus sombre du doré pour être contrasté sur fond blanc
 
     for label in all_active_labels:
         sub = plot_data[plot_data["curve_label"] == label].dropna(subset=["frequency", abs_type])
@@ -381,17 +409,17 @@ with tab1:
             hovertemplate=f"<b>%{{fullData.name}}</b><br>Freq: %{{x}} Hz<br>α: %{{y:.3f}}{hover_tag}<extra></extra>"
         ))
 
+    # Forcer la grille de Plotly à apparaître de façon contrastée sur fond clair
     fig.update_layout(
         title=f"Sound Absorption Coefficients ({abs_type.replace('_', ' ').title()})",
-        xaxis=dict(title="Frequency (Hz)", type="log", tickmode="array", tickvals=ticks, ticktext=[str(t) for t in ticks], showgrid=True, gridcolor="rgba(128,128,128,0.2)"),
-        yaxis=dict(title="Absorption Coefficient α", range=[-0.05, 1.1], showgrid=True, gridcolor="rgba(128,128,128,0.2)"),
-        hovermode="x unified", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(title="Frequency (Hz)", type="log", tickmode="array", tickvals=ticks, ticktext=[str(t) for t in ticks], showgrid=True, gridcolor="#e2e8f0"),
+        yaxis=dict(title="Absorption Coefficient α", range=[-0.05, 1.1], showgrid=True, gridcolor="#e2e8f0"),
+        hovermode="x unified", plot_bgcolor="#ffffff", paper_bgcolor="rgba(0,0,0,0)",
         legend=dict(orientation="h", yanchor="bottom", y=-0.35, xanchor="center", x=0.5), height=640
     )
     st.plotly_chart(fig, use_container_width=True)
 
 with tab2:
-    # ── AJOUT DU BOUTON POUR TÉLÉCHARGER LE FICHIER GLOBAL DEPUIS GITHUB ──
     st.markdown("### 📥 Télécharger le fichier source global")
     st.download_button(
         label=f"🟢 Télécharger le fichier complet actuellement en ligne ({current_filename})",
