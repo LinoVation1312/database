@@ -12,7 +12,7 @@ import base64
 # Remplissez vos informations ici ou utilisez les secrets Streamlit
 GITHUB_USER = "VOTRE_NOM_UTILISATEUR_GITHUB"
 GITHUB_REPO = "VOTRE_NOM_DE_DEPOT"
-FILE_PATH = "Database_Vx.xlsx"  # Chemin du fichier dans le dépôt
+FILE_PATH = "Database_V3.xlsx"  # Chemin du fichier dans le dépôt
 BRANCH = "main"
 
 # Récupération du token sécurisé depuis les Secrets Streamlit Cloud
