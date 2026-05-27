@@ -21,7 +21,7 @@ https://database-alpha.streamlit.app/
   - `pandas`
   - `matplotlib`
   - `openpyxl`
-  - `numpy`
+  - `plotly`
 
 You can install the required dependencies using the following command:
 
