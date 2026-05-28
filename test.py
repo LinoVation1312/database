@@ -376,6 +376,70 @@ st.sidebar.markdown("<small><span style='color:#7c3aed'>⊕</span> composite —
 abs_type = st.sidebar.radio("Measurement Method", ["alpha_cabin", "alpha_kundt"])
 
 all_active_labels = selected_labels
+
+# ─────────────────────────────────────────────────────────────────
+# CLASSEMENT VS RÉFÉRENCE (Sidebar Bottom)
+# ─────────────────────────────────────────────────────────────────
+with st.sidebar.expander("🏆 Classement vs Référence", expanded=False):
+    st.markdown("<small>Identifiez les meilleurs échantillons par rapport à une courbe cible.</small>", unsafe_allow_html=True)
+    
+    if available_labels:
+        target_ref = st.selectbox("Choisir la cible", options=["-- Sélectionner --"] + available_labels)
+        
+        if target_ref != "-- Sélectionner --":
+            if st.button("Lancer l'analyse"):
+                # 1. Isoler les données de la référence cible
+                ref_data = fdf[fdf["curve_label"] == target_ref].dropna(subset=["frequency", abs_type])
+                ref_data = ref_data.groupby("frequency", as_index=False)[abs_type].mean()
+                ref_dict = dict(zip(ref_data["frequency"], ref_data[abs_type]))
+                
+                always_above = []
+                ranking = []
+                
+                # 2. Analyser les autres échantillons
+                candidates = [l for l in available_labels if l != target_ref]
+                
+                for cand in candidates:
+                    cand_data = fdf[fdf["curve_label"] == cand].dropna(subset=["frequency", abs_type])
+                    if cand_data.empty: continue
+                    cand_data = cand_data.groupby("frequency", as_index=False)[abs_type].mean()
+                    
+                    diffs = []
+                    is_always_above = True
+                    
+                    # Comparaison point par point (par fréquence)
+                    for _, row in cand_data.iterrows():
+                        freq = row["frequency"]
+                        val = row[abs_type]
+                        if freq in ref_dict:
+                            diff = val - ref_dict[freq]
+                            diffs.append(diff)
+                            if diff < 0:
+                                is_always_above = False
+                    
+                    # S'il y a des fréquences en commun, on calcule le score
+                    if diffs:
+                        avg_diff = sum(diffs) / len(diffs)
+                        data_dict = {"Échantillon": cand, "Δ Moyen (α)": round(avg_diff, 4)}
+                        
+                        if is_always_above:
+                            always_above.append(data_dict)
+                        ranking.append(data_dict)
+                
+                # 3. Affichage des résultats
+                if always_above:
+                    st.success("✅ Échantillons systématiquement au-dessus (ou égaux) à la référence :")
+                    df_always = pd.DataFrame(always_above).sort_values(by="Δ Moyen (α)", ascending=False)
+                    st.dataframe(df_always, hide_index=True, use_container_width=True)
+                else:
+                    st.info("Aucun échantillon ne dépasse la référence sur l'intégralité de la plage de fréquences.")
+                    
+                    if ranking:
+                        st.write("🔝 **Top 5 des meilleures alternatives :**")
+                        # On trie par le plus grand delta moyen (le plus au-dessus ou le moins en-dessous)
+                        top5 = pd.DataFrame(ranking).sort_values(by="Δ Moyen (α)", ascending=False).head(5)
+                        st.dataframe(top5, hide_index=True, use_container_width=True)
+                        
 if not all_active_labels:
     st.warning("👈 Select at least one sample from the sidebar to generate the charts.")
     st.stop()
