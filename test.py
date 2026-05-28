@@ -378,10 +378,10 @@ abs_type = st.sidebar.radio("Measurement Method", ["alpha_cabin", "alpha_kundt"]
 all_active_labels = selected_labels
 
 # ─────────────────────────────────────────────────────────────────
-# RANKING VS REFERENCE (Sidebar Bottom)
+# RANKING VS REFERENCE (Sidebar Bottom) - WEIGHTED LOW FREQS
 # ─────────────────────────────────────────────────────────────────
 with st.sidebar.expander("🏆 Ranking vs Reference", expanded=False):
-    st.markdown("<small>Identify the best samples compared to a target curve (analyzed up to 4 kHz).</small>", unsafe_allow_html=True)
+    st.markdown("<small>Identify the best samples compared to a target curve (analyzed up to 4 kHz, <b>weighted for low frequencies</b>).</small>", unsafe_allow_html=True)
     
     if available_labels:
         target_ref = st.selectbox("Select Target", options=["-- Select --"] + available_labels)
@@ -404,7 +404,8 @@ with st.sidebar.expander("🏆 Ranking vs Reference", expanded=False):
                     if cand_data.empty: continue
                     cand_data = cand_data.groupby("frequency", as_index=False)[abs_type].mean()
                     
-                    diffs = []
+                    weighted_diffs = []
+                    sum_weights = 0
                     is_always_above = True
                     
                     # Point-by-point comparison (by frequency)
@@ -413,14 +414,22 @@ with st.sidebar.expander("🏆 Ranking vs Reference", expanded=False):
                         val = row[abs_type]
                         if freq in ref_dict:
                             diff = val - ref_dict[freq]
-                            diffs.append(diff)
+                            
+                            # 💡 PONDÉRATION : inversement proportionnelle à la fréquence.
+                            # Plus la fréquence est basse, plus le poids est fort.
+                            # Exemple : freq = 400 Hz -> weight = 10 | freq = 4000 Hz -> weight = 1
+                            weight = 4000.0 / freq
+                            
+                            weighted_diffs.append(diff * weight)
+                            sum_weights += weight
+                            
                             if diff < 0:
                                 is_always_above = False
                     
                     # If there are common frequencies, calculate the score
-                    if diffs:
-                        avg_diff = sum(diffs) / len(diffs)
-                        data_dict = {"Sample": cand, "Avg Δ (α)": round(avg_diff, 4)}
+                    if weighted_diffs and sum_weights > 0:
+                        avg_diff = sum(weighted_diffs) / sum_weights
+                        data_dict = {"Sample": cand, "Weighted Score (α)": round(avg_diff, 4)}
                         
                         if is_always_above:
                             always_above.append(data_dict)
@@ -429,17 +438,16 @@ with st.sidebar.expander("🏆 Ranking vs Reference", expanded=False):
                 # 3. Display results
                 if always_above:
                     st.success("✅ Samples consistently above (or equal to) the reference up to 4 kHz:")
-                    df_always = pd.DataFrame(always_above).sort_values(by="Avg Δ (α)", ascending=False)
+                    df_always = pd.DataFrame(always_above).sort_values(by="Weighted Score (α)", ascending=False)
                     st.dataframe(df_always, hide_index=True, use_container_width=True)
                 else:
                     st.info("No sample outperforms the reference across the entire frequency range (up to 4 kHz).")
                     
                     if ranking:
-                        st.write("🔝 **Top 5 Best Alternatives:**")
-                        # Sort by highest average delta (most above or least below)
-                        top5 = pd.DataFrame(ranking).sort_values(by="Avg Δ (α)", ascending=False).head(5)
+                        st.write("🔝 **Top 5 Best Alternatives (Weighted for LF):**")
+                        # Sort by highest weighted average delta
+                        top5 = pd.DataFrame(ranking).sort_values(by="Weighted Score (α)", ascending=False).head(5)
                         st.dataframe(top5, hide_index=True, use_container_width=True)
-                        
 if not all_active_labels:
     st.warning("👈 Select at least one sample from the sidebar to generate the charts.")
     st.stop()
