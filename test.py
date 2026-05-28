@@ -381,15 +381,15 @@ all_active_labels = selected_labels
 # RANKING VS REFERENCE (Sidebar Bottom) - WEIGHTED LOW FREQS
 # ─────────────────────────────────────────────────────────────────
 with st.sidebar.expander("🏆 Ranking vs Reference", expanded=False):
-    st.markdown("<small>Identify the best samples compared to a target curve (analyzed up to 4 kHz, <b>weighted for low frequencies</b>).</small>", unsafe_allow_html=True)
+    st.markdown("<small>Identify the best samples compared to a target curve (analyzed up to 2 kHz, <b>weighted for low frequencies</b>).</small>", unsafe_allow_html=True)
     
     if available_labels:
         target_ref = st.selectbox("Select Target", options=["-- Select --"] + available_labels)
         
         if target_ref != "-- Select --":
             if st.button("Run Analysis"):
-                # 1. Isolate target reference data and limit to <= 4000 Hz
-                ref_data = fdf[(fdf["curve_label"] == target_ref) & (fdf["frequency"] <= 4000)].dropna(subset=["frequency", abs_type])
+                # 1. Isolate target reference data and limit to <= 2000 Hz
+                ref_data = fdf[(fdf["curve_label"] == target_ref) & (fdf["frequency"] <= 2000)].dropna(subset=["frequency", abs_type])
                 ref_data = ref_data.groupby("frequency", as_index=False)[abs_type].mean()
                 ref_dict = dict(zip(ref_data["frequency"], ref_data[abs_type]))
                 
@@ -400,7 +400,7 @@ with st.sidebar.expander("🏆 Ranking vs Reference", expanded=False):
                 candidates = [l for l in available_labels if l != target_ref]
                 
                 for cand in candidates:
-                    cand_data = fdf[(fdf["curve_label"] == cand) & (fdf["frequency"] <= 4000)].dropna(subset=["frequency", abs_type])
+                    cand_data = fdf[(fdf["curve_label"] == cand) & (fdf["frequency"] <= 2000)].dropna(subset=["frequency", abs_type])
                     if cand_data.empty: continue
                     cand_data = cand_data.groupby("frequency", as_index=False)[abs_type].mean()
                     
@@ -418,7 +418,7 @@ with st.sidebar.expander("🏆 Ranking vs Reference", expanded=False):
                             # 💡 PONDÉRATION : inversement proportionnelle à la fréquence.
                             # Plus la fréquence est basse, plus le poids est fort.
                             # Exemple : freq = 400 Hz -> weight = 10 | freq = 4000 Hz -> weight = 1
-                            weight = 4000.0 / freq
+                            weight = 2000.0 / freq
                             
                             weighted_diffs.append(diff * weight)
                             sum_weights += weight
@@ -437,11 +437,11 @@ with st.sidebar.expander("🏆 Ranking vs Reference", expanded=False):
                 
                 # 3. Display results
                 if always_above:
-                    st.success("✅ Samples consistently above (or equal to) the reference up to 4 kHz:")
+                    st.success("✅ Samples consistently above (or equal to) the reference up to 2 kHz:")
                     df_always = pd.DataFrame(always_above).sort_values(by="Weighted Score (α)", ascending=False)
                     st.dataframe(df_always, hide_index=True, use_container_width=True)
                 else:
-                    st.info("No sample outperforms the reference across the entire frequency range (up to 4 kHz).")
+                    st.info("No sample outperforms the reference across the entire frequency range (up to 2 kHz).")
                     
                     if ranking:
                         st.write("🔝 **Top 5 Best Alternatives (Weighted for LF):**")
