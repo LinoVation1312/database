@@ -529,7 +529,7 @@ with tab2:
     st.dataframe(wide_df, use_container_width=True, hide_index=True)
     
     st.markdown("### 📋 Copy to Excel")
-    st.info("💡 **Click the 'Copy' icon in the top right corner of the block below**, then paste it directly into cell A1 of your Excel file.")
+    st.info("💡 **Click the 'Copy' icon in the top right corner of the block below**, then paste it directly into your Excel file.")
     
     # Workaround pour le "Copy to Clipboard" : conversion en texte séparé par des tabulations (format Excel)
     tsv_data = wide_df.to_csv(index=False, sep='\t')
