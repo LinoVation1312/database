@@ -518,7 +518,6 @@ with tab2:
     st.markdown("---")
 
     st.markdown("### 📊 Formatted Data for Export")
-    st.info("The table below has been restructured. **Hover over the top right corner of the table to reveal the 'Copy' icon, then click it to paste everything directly into Excel!**")
     
     # Préparation des données (Pivot Table)
     pivot_data = plot_data.groupby(['frequency', 'curve_label'], as_index=False)[abs_type].mean()
@@ -526,8 +525,15 @@ with tab2:
     wide_df.columns.name = None
     wide_df = wide_df.rename(columns={"frequency": "Frequency (Hz)"})
     
-    # Affichage interactif avec bouton de copie natif
+    # Affichage interactif de la table
     st.dataframe(wide_df, use_container_width=True, hide_index=True)
+    
+    st.markdown("### 📋 Copy to Excel")
+    st.info("💡 **Click the 'Copy' icon in the top right corner of the block below**, then paste it directly into cell A1 of your Excel file.")
+    
+    # Workaround pour le "Copy to Clipboard" : conversion en texte séparé par des tabulations (format Excel)
+    tsv_data = wide_df.to_csv(index=False, sep='\t')
+    st.code(tsv_data, language="text")
     
     # Génération Excel Directe avec cellules formatées
     output_excel = io.BytesIO()
