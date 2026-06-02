@@ -111,8 +111,6 @@ st.markdown("""
     .stMetric { background-color: #f1f5f9; padding: 15px; border-radius: 10px; border: 1px solid #e2e8f0; width: fit-content; }
     .stMetric * { color: #0f172a !important; }
     h1 { color: #1e40af !important; font-weight: 800 !important; }
-    .composite-info-box { background-color: #f3e8ff; border-left: 4px solid #7c3aed; border-radius: 6px; padding: 10px 14px; margin-bottom: 10px; font-size: 0.85em; color: #5b21b6; }
-    .ref-info-box { background-color: #fef3c7; border-left: 4px solid #d97706; border-radius: 6px; padding: 10px 14px; margin-bottom: 10px; font-size: 0.85em; color: #92400e; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -330,7 +328,7 @@ available_labels = ref_labels + sample_labels
 select_all      = st.sidebar.checkbox("Select All Samples", value=False)
 selected_labels = st.sidebar.multiselect(f"Select Samples ({len(available_labels)} available)", available_labels, default=available_labels if select_all else [])
 
-st.sidebar.markdown("<small><span style='color:#7c3aed'>⊕</span> composite — dashed line<br><span style='color:#d97706'>★</span> reference — bold gold line</small>", unsafe_allow_html=True)
+st.sidebar.markdown("<small><span style='color:#7c3aed'>⊕</span> composite<br><span style='color:#d97706'>★</span> reference</small>", unsafe_allow_html=True)
 abs_type = st.sidebar.radio("Measurement Method", ["alpha_cabin", "alpha_kundt"])
 
 all_active_labels = selected_labels
@@ -399,31 +397,56 @@ with tab1:
     with col_c: st.metric("References", n_sel_ref)
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # 🎨 NOUVEAU: Panneau de personnalisation avant export
-    with st.expander("🛠️ Personnalisation de l'affichage et de l'export HTML", expanded=True):
-        st.info("💡 **Astuce Export HTML :** Réglez l'épaisseur, les marqueurs et les graduations ci-dessous. Une fois le graphique exporté en HTML, vous pourrez encore modifier les titres en cliquant dessus !")
+    with st.expander("🛠️ Display & HTML Export Customization", expanded=True):
+        st.info("💡 **HTML Export Tip:** Set your line widths, markers, and tick settings below. Once you export the chart as HTML, you can still edit the titles by clicking directly on them!")
+        
         c1, c2, c3 = st.columns(3)
-        with c1: main_title = st.text_input("Titre principal", f"Sound Absorption Coefficients ({abs_type.replace('_', ' ').title()})")
-        with c2: x_title = st.text_input("Titre axe X", "Frequency (Hz)")
-        with c3: y_title = st.text_input("Titre axe Y", "Absorption Coefficient α")
+        with c1: main_title = st.text_input("Main Title", f"Sound Absorption Coefficients ({abs_type.replace('_', ' ').title()})")
+        with c2: x_title = st.text_input("X-Axis Title", "Frequency (Hz)")
+        with c3: y_title = st.text_input("Y-Axis Title", "Absorption Coefficient α")
 
         c4, c5, c6 = st.columns(3)
-        with c4: custom_lw = st.slider("Épaisseur des lignes", 1.0, 5.0, 2.5, 0.5)
-        with c5: custom_ms = st.slider("Taille des marqueurs", 0, 15, 6, 1)
+        with c4: custom_lw = st.slider("Global Line Width", 1.0, 5.0, 2.5, 0.5)
+        with c5: custom_ms = st.slider("Global Marker Size", 0, 15, 6, 1)
         with c6:
-            show_grid = st.checkbox("Afficher la grille (Grid)", value=True)
-            tick_density = st.radio("Densité des graduations (X)", ["Standard", "Détaillée"], horizontal=True)
+            show_grid = st.checkbox("Show Grid", value=True)
+            tick_density = st.radio("X-Axis Tick Density", ["Standard", "Detailed"], horizontal=True)
+
+        st.markdown("#### 🖌️ Curve Styles")
+        style1, style2, style3 = st.columns(3)
+        
+        line_styles = ["solid", "dash", "dot", "dashdot", "longdash", "longdashdot"]
+        marker_styles = ["circle", "square", "diamond", "cross", "x", "triangle-up", "pentagon", "hexagram", "star", "diamond-wide", "none"]
+
+        with style1:
+            st.markdown("**★ Reference**")
+            ref_dash = st.selectbox("Line Style (Ref)", line_styles, index=0) # solid
+            ref_marker = st.selectbox("Marker (Ref)", marker_styles, index=8) # star
+
+        with style2:
+            st.markdown("**⊕ Composite**")
+            comp_dash = st.selectbox("Line Style (Comp)", line_styles, index=1) # dash
+            comp_marker = st.selectbox("Marker (Comp)", marker_styles, index=2) # diamond
+
+        with style3:
+            st.markdown("**Single Layer**")
+            sing_dash = st.selectbox("Line Style (Single)", line_styles, index=0) # solid
+            sing_marker = st.selectbox("Marker (Single)", marker_styles, index=0) # circle
 
     FREQ_TICKS = {
         "alpha_cabin": [315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300, 8000, 10000],
         "alpha_kundt": [200, 250, 315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300]
     }
     
+    xaxis_dict = dict(title=x_title, type="log", showgrid=show_grid, gridcolor="#e2e8f0")
+
     if tick_density == "Standard":
         ticks = FREQ_TICKS.get(abs_type, sorted(plot_data["frequency"].dropna().unique()))
+        xaxis_dict.update(dict(tickmode="array", tickvals=ticks, ticktext=[str(int(t)) for t in ticks]))
     else:
-        # Affiche toutes les fréquences mesurées pour une grille détaillée
+        # Detailed Grid: Display every single frequency logged to prevent Plotly from hiding points.
         ticks = sorted(plot_data["frequency"].dropna().unique())
+        xaxis_dict.update(dict(tickmode="array", tickvals=ticks, ticktext=[str(int(t)) for t in ticks], tickangle=-45))
 
     fig = go.Figure()
     color_idx = 0
@@ -439,27 +462,31 @@ with tab1:
         comp_curve = label.startswith("⊕")
 
         if ref_curve:
-            color, line_dash, line_width, marker_sym, marker_sz, hover_tag = REF_COLOR, "solid", custom_lw + 1.0, "star", custom_ms + 4, " <i>(reference)</i>"
+            color, line_dash, line_width, marker_sym, marker_sz, hover_tag = REF_COLOR, ref_dash, custom_lw + 1.0, ref_marker, custom_ms + 4, " <i>(reference)</i>"
         elif comp_curve:
-            color, line_dash, line_width, marker_sym, marker_sz, hover_tag = COLORS[color_idx % len(COLORS)], "dash", custom_lw, "diamond", custom_ms + 1, " <i>(composite)</i>"; color_idx += 1
+            color, line_dash, line_width, marker_sym, marker_sz, hover_tag = COLORS[color_idx % len(COLORS)], comp_dash, custom_lw, comp_marker, custom_ms + 1, " <i>(composite)</i>"; color_idx += 1
         else:
-            color, line_dash, line_width, marker_sym, marker_sz, hover_tag = COLORS[color_idx % len(COLORS)], "solid", custom_lw, "circle", custom_ms, ""; color_idx += 1
+            color, line_dash, line_width, marker_sym, marker_sz, hover_tag = COLORS[color_idx % len(COLORS)], sing_dash, custom_lw, sing_marker, custom_ms, ""; color_idx += 1
+
+        show_markers = marker_sym != "none" and custom_ms > 0
 
         fig.add_trace(go.Scatter(
-            x=sub["frequency"], y=sub[abs_type], mode="lines+markers" if custom_ms > 0 else "lines", name=label,
-            line=dict(color=color, width=line_width, dash=line_dash), marker=dict(color=color, size=marker_sz, symbol=marker_sym),
+            x=sub["frequency"], y=sub[abs_type], 
+            mode="lines+markers" if show_markers else "lines", 
+            name=label,
+            line=dict(color=color, width=line_width, dash=line_dash), 
+            marker=dict(color=color, size=marker_sz, symbol=marker_sym),
             hovertemplate=f"<b>%{{fullData.name}}</b><br>Freq: %{{x}} Hz<br>α: %{{y:.3f}}{hover_tag}<extra></extra>"
         ))
 
     fig.update_layout(
         title=main_title,
-        xaxis=dict(title=x_title, type="log", tickmode="array", tickvals=ticks, ticktext=[str(t) for t in ticks], showgrid=show_grid, gridcolor="#e2e8f0"),
+        xaxis=xaxis_dict,
         yaxis=dict(title=y_title, range=[-0.05, 1.1], showgrid=show_grid, gridcolor="#e2e8f0"),
         hovermode="x unified", plot_bgcolor="#ffffff", paper_bgcolor="rgba(0,0,0,0)",
-        legend=dict(orientation="h", yanchor="bottom", y=-0.35, xanchor="center", x=0.5), height=640
+        legend=dict(orientation="h", yanchor="bottom", y=-0.45, xanchor="center", x=0.5), height=640
     )
 
-    # NOUVEAU : Configuration Plotly pour permettre l'édition du texte dans le HTML
     plotly_config = {
         'editable': True,
         'edits': {
@@ -474,39 +501,39 @@ with tab1:
 
     html_bytes = pio.to_html(fig, include_plotlyjs="cdn", full_html=True, config=plotly_config).encode("utf-8")
     st.download_button(
-        label="📥 Télécharger le graphique (HTML Interactif)",
+        label="📥 Download Chart (Interactive HTML)",
         data=html_bytes,
         file_name="absorption_curves.html",
         mime="text/html",
     )
 
 with tab2:
-    st.markdown("### 📥 Télécharger le fichier source")
+    st.markdown("### 📥 Source File Download")
     st.download_button(
-        label=f"🟢 Télécharger le fichier complet Excel actuel ({current_filename})",
+        label=f"🟢 Download Current Complete Excel File ({current_filename})",
         data=excel_data,
         file_name=current_filename,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
     st.markdown("---")
 
-    st.markdown("### 📊 Données formatées pour Export")
-    st.caption("Le tableau ci-dessous a été restructuré. **Cliquez dessus, puis utilisez l'icône 'Copier' (en haut à droite) pour tout coller directement dans Excel !**")
+    st.markdown("### 📊 Formatted Data for Export")
+    st.info("The table below has been restructured. **Hover over the top right corner of the table to reveal the 'Copy' icon, then click it to paste everything directly into Excel!**")
     
     # Préparation des données (Pivot Table)
     pivot_data = plot_data.groupby(['frequency', 'curve_label'], as_index=False)[abs_type].mean()
     wide_df = pivot_data.pivot(index="frequency", columns="curve_label", values=abs_type).reset_index()
-    wide_df.columns.name = None # Nettoyage de l'index de colonne
-    wide_df = wide_df.rename(columns={"frequency": "Fréquence (Hz)"})
+    wide_df.columns.name = None
+    wide_df = wide_df.rename(columns={"frequency": "Frequency (Hz)"})
     
     # Affichage interactif avec bouton de copie natif
     st.dataframe(wide_df, use_container_width=True, hide_index=True)
     
-    # NOUVEAU: Génération Excel Directe avec cellules formatées
+    # Génération Excel Directe avec cellules formatées
     output_excel = io.BytesIO()
     with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
-        wide_df.to_excel(writer, index=False, sheet_name='Absorptions')
-        worksheet = writer.sheets['Absorptions']
+        wide_df.to_excel(writer, index=False, sheet_name='Absorption_Data')
+        worksheet = writer.sheets['Absorption_Data']
         
         # Ajustement automatique de la largeur des colonnes
         for col in worksheet.columns:
@@ -523,8 +550,8 @@ with tab2:
     excel_bytes = output_excel.getvalue()
     
     st.download_button(
-        label="📥 Exporter directement en tableau Excel (.xlsx)",
+        label="📥 Direct Export to Excel (.xlsx)",
         data=excel_bytes,
-        file_name="export_donnees_absorption.xlsx",
+        file_name="absorption_data_export.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
