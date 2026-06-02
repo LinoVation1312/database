@@ -23,7 +23,6 @@ else:
 headers = {"Authorization": f"token {TOKEN}", "Accept": "application/vnd.github.v3+json"} if TOKEN else {}
 
 # Flexible regex rule for file validation (case-insensitive)
-# Validates: Database_V1, database_v2, DATABASE-V3, Database V4, databasev5...
 FILENAME_REGEX = r"^database[-_\s]?v.*\.xlsx$"
 
 # ─────────────────────────────────────────────────────────────────
@@ -31,10 +30,8 @@ FILENAME_REGEX = r"^database[-_\s]?v.*\.xlsx$"
 # ─────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=60)
 def find_and_download_current_file():
-    """Automatically searches for a database file on GitHub (flexible on the name) and downloads it"""
     contents_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/"
     try:
-        # Dynamic URL parameter to bypass GitHub API's aggressive caching
         res = requests.get(contents_url, headers=headers, params={"t": pd.Timestamp.now().timestamp()})
         if res.status_code == 200:
             files = res.json()
@@ -48,7 +45,6 @@ def find_and_download_current_file():
         return None, None
 
 def upload_new_excel_to_github(new_filename, file_bytes):
-    """Updates or creates the new file on GitHub, correctly managing the SHA"""
     if not TOKEN:
         st.error("❌ The GITHUB_TOKEN is missing from the application secrets.")
         return False
@@ -59,21 +55,17 @@ def upload_new_excel_to_github(new_filename, file_bytes):
         existing_sha = None
         old_filename_to_delete = None
 
-        # 1. List files to see if a database file already exists
         res = requests.get(contents_url, headers=headers, params={"t": pd.Timestamp.now().timestamp()})
         if res.status_code == 200:
             for f in res.json():
                 if re.match(FILENAME_REGEX, f["name"].lower()):
                     if f["name"].lower() == new_filename.lower():
-                        # Same name! Fetch SHA to overwrite it directly
                         existing_sha = f["sha"]
-                        new_filename = f["name"] # Keep the existing file's casing if identical
+                        new_filename = f["name"]
                     else:
-                        # Different name (e.g., V1 to V2), keep track to delete it AFTER the upload
                         old_filename_to_delete = f["name"]
                         old_file_sha = f["sha"]
 
-        # 2. Upload / Overwrite target file
         upload_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{new_filename}"
         content_b64 = base64.b64encode(file_bytes).decode("utf-8")
         
@@ -82,7 +74,6 @@ def upload_new_excel_to_github(new_filename, file_bytes):
             "content": content_b64,
             "branch": BRANCH
         }
-        # If the file already existed under the same name, pass the required SHA
         if existing_sha:
             put_data["sha"] = existing_sha
 
@@ -92,7 +83,6 @@ def upload_new_excel_to_github(new_filename, file_bytes):
             st.error(f"❌ GitHub push failed (Code {put_res.status_code}): {put_res.text}")
             return False
 
-        # 3. Clean up the old file if the new file was successfully deployed with a different name
         if old_filename_to_delete:
             delete_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{old_filename_to_delete}"
             del_data = {
@@ -115,41 +105,14 @@ st.set_page_config(page_title="DATABASE", page_icon="🔊", layout="wide")
 
 st.markdown("""
 <style>
-    /* Sidebar Style - Light Theme */
     [data-testid="stSidebar"] { background-color: #f8fafc; border-right: 1px solid #e2e8f0; }
     [data-testid="stSidebar"] * { color: #0f172a !important; }
-    
-    /* Sidebar interactive elements and buttons */
     [data-testid="stSidebar"] button { background-color: #ffffff !important; border: 1px solid #cbd5e1 !important; color: #0f172a !important; }
-    
-    /* Metrics UI boxes */
     .stMetric { background-color: #f1f5f9; padding: 15px; border-radius: 10px; border: 1px solid #e2e8f0; width: fit-content; }
     .stMetric * { color: #0f172a !important; }
-    
-    /* Main Title */
     h1 { color: #1e40af !important; font-weight: 800 !important; }
-    
-    /* Composite info notice boxes */
-    .composite-info-box { 
-        background-color: #f3e8ff; 
-        border-left: 4px solid #7c3aed; 
-        border-radius: 6px; 
-        padding: 10px 14px; 
-        margin-bottom: 10px; 
-        font-size: 0.85em; 
-        color: #5b21b6; 
-    }
-    
-    /* Reference info notice boxes */
-    .ref-info-box { 
-        background-color: #fef3c7; 
-        border-left: 4px solid #d97706; 
-        border-radius: 6px; 
-        padding: 10px 14px; 
-        margin-bottom: 10px; 
-        font-size: 0.85em; 
-        color: #92400e; 
-    }
+    .composite-info-box { background-color: #f3e8ff; border-left: 4px solid #7c3aed; border-radius: 6px; padding: 10px 14px; margin-bottom: 10px; font-size: 0.85em; color: #5b21b6; }
+    .ref-info-box { background-color: #fef3c7; border-left: 4px solid #d97706; border-radius: 6px; padding: 10px 14px; margin-bottom: 10px; font-size: 0.85em; color: #92400e; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -300,18 +263,16 @@ def load_data(file_bytes: bytes):
 # ─────────────────────────────────────────────────────────────────
 st.title("🔊 DATABASE")
 
-# --- INITIAL LOAD VIA GITHUB API ---
 current_filename, excel_data = find_and_download_current_file()
 
-# --- ADMIN PANEL : FILE RE-UPLOAD ---
 with st.sidebar.expander("🔄 GitHub Administration", expanded=False):
-    uploaded_file = st.file_uploader("Upload a new database file", type=["xlsx"], help="The filename must contain 'Database' followed by a version number (e.g. database_v2.xlsx, DATABASE-V3.xlsx)")
+    uploaded_file = st.file_uploader("Upload a new database file", type=["xlsx"])
     if uploaded_file:
         file_bytes = uploaded_file.read()
         filename_uploaded = uploaded_file.name
         
         if not re.match(FILENAME_REGEX, filename_uploaded.lower()):
-            st.error("⚠️ Invalid filename! The name must contain 'Database' followed by a version indicator (e.g. Database_V4.xlsx, database-v2.xlsx)")
+            st.error("⚠️ Invalid filename!")
         else:
             if st.button("🚀 Overwrite & Publish Version"):
                 with st.spinner("Uploading to GitHub..."):
@@ -319,16 +280,13 @@ with st.sidebar.expander("🔄 GitHub Administration", expanded=False):
                         st.success(f"✅ Successfully deployed: {filename_uploaded}")
                         st.cache_data.clear()
                         import time
-                        time.sleep(1.5)  # Let GitHub API stabilize
+                        time.sleep(1.5)
                         st.rerun()
 
-# --- ERROR HANDLING FOR UNINITIALIZED REPO ---
 if excel_data is None:
-    st.error("❌ No valid database file (e.g. 'Database_V1.xlsx') was found on GitHub.")
-    st.info("Please use the Administration module in the sidebar to initialize the database.")
+    st.error("❌ No valid database file was found on GitHub.")
     st.stop()
 
-# Active active database info tag
 st.caption(f"📂 Active database loaded from GitHub: `{current_filename}`")
 
 df, mass_col = load_data(excel_data)
@@ -340,7 +298,7 @@ if df is None: st.stop()
 st.sidebar.header("🎛️ Global Filters")
 n_comp   = int(df[~df["is_ref"]].groupby("stn")["is_composite"].first().sum())
 n_single = int((~df[~df["is_ref"]].groupby("stn")["is_composite"].first()).sum())
-sample_type = st.sidebar.radio("Sample Type", ["All", "Single Layer Only", "Composite Only"], index=0, help=f"{n_comp} composite · {n_single} single-layer")
+sample_type = st.sidebar.radio("Sample Type", ["All", "Single Layer Only", "Composite Only"], index=0)
 st.sidebar.markdown("---")
 
 trim_sel = (st.sidebar.multiselect("Trim Level", sorted(df["trim_level"].dropna().unique())) if "trim_level" in df.columns else [])
@@ -377,77 +335,46 @@ abs_type = st.sidebar.radio("Measurement Method", ["alpha_cabin", "alpha_kundt"]
 
 all_active_labels = selected_labels
 
-# ─────────────────────────────────────────────────────────────────
-# RANKING VS REFERENCE (Sidebar Bottom) - WEIGHTED LOW FREQS
-# ─────────────────────────────────────────────────────────────────
 with st.sidebar.expander("🏆 Ranking vs Reference", expanded=False):
-    st.markdown("<small>Identify the best samples compared to a target curve (analyzed up to 2 kHz, <b>weighted for low frequencies</b>).</small>", unsafe_allow_html=True)
-    
     if available_labels:
         target_ref = st.selectbox("Select Target", options=["-- Select --"] + available_labels)
-        
         if target_ref != "-- Select --":
             if st.button("Run Analysis"):
-                # 1. Isolate target reference data and limit to <= 2000 Hz
                 ref_data = fdf[(fdf["curve_label"] == target_ref) & (fdf["frequency"] <= 2000)].dropna(subset=["frequency", abs_type])
                 ref_data = ref_data.groupby("frequency", as_index=False)[abs_type].mean()
                 ref_dict = dict(zip(ref_data["frequency"], ref_data[abs_type]))
                 
-                always_above = []
-                ranking = []
-                
-                # 2. Analyze other samples
+                always_above, ranking = [], []
                 candidates = [l for l in available_labels if l != target_ref]
-                
                 for cand in candidates:
                     cand_data = fdf[(fdf["curve_label"] == cand) & (fdf["frequency"] <= 2000)].dropna(subset=["frequency", abs_type])
                     if cand_data.empty: continue
                     cand_data = cand_data.groupby("frequency", as_index=False)[abs_type].mean()
                     
-                    weighted_diffs = []
-                    sum_weights = 0
-                    is_always_above = True
-                    
-                    # Point-by-point comparison (by frequency)
+                    weighted_diffs, sum_weights, is_always_above = [], 0, True
                     for _, row in cand_data.iterrows():
-                        freq = row["frequency"]
-                        val = row[abs_type]
+                        freq, val = row["frequency"], row[abs_type]
                         if freq in ref_dict:
                             diff = val - ref_dict[freq]
-                            
-                            # 💡 PONDÉRATION : inversement proportionnelle à la fréquence.
-                            # Plus la fréquence est basse, plus le poids est fort.
-                            # Exemple : freq = 400 Hz -> weight = 10 | freq = 4000 Hz -> weight = 1
                             weight = 2000.0 / freq
-                            
                             weighted_diffs.append(diff * weight)
                             sum_weights += weight
-                            
-                            if diff < 0:
-                                is_always_above = False
+                            if diff < 0: is_always_above = False
                     
-                    # If there are common frequencies, calculate the score
                     if weighted_diffs and sum_weights > 0:
                         avg_diff = sum(weighted_diffs) / sum_weights
                         data_dict = {"Sample": cand, "Weighted Score (α)": round(avg_diff, 4)}
-                        
-                        if is_always_above:
-                            always_above.append(data_dict)
+                        if is_always_above: always_above.append(data_dict)
                         ranking.append(data_dict)
                 
-                # 3. Display results
                 if always_above:
                     st.success("✅ Samples consistently above (or equal to) the reference up to 2 kHz:")
-                    df_always = pd.DataFrame(always_above).sort_values(by="Weighted Score (α)", ascending=False)
-                    st.dataframe(df_always, hide_index=True, use_container_width=True)
+                    st.dataframe(pd.DataFrame(always_above).sort_values(by="Weighted Score (α)", ascending=False), hide_index=True)
                 else:
-                    st.info("No sample outperforms the reference across the entire frequency range (up to 2 kHz).")
-                    
+                    st.info("No sample outperforms the reference across the entire frequency range.")
                     if ranking:
-                        st.write("🔝 **Top 5 Best Alternatives (Weighted for LF):**")
-                        # Sort by highest weighted average delta
-                        top5 = pd.DataFrame(ranking).sort_values(by="Weighted Score (α)", ascending=False).head(5)
-                        st.dataframe(top5, hide_index=True, use_container_width=True)
+                        st.dataframe(pd.DataFrame(ranking).sort_values(by="Weighted Score (α)", ascending=False).head(5), hide_index=True)
+
 if not all_active_labels:
     st.warning("👈 Select at least one sample from the sidebar to generate the charts.")
     st.stop()
@@ -472,18 +399,31 @@ with tab1:
     with col_c: st.metric("References", n_sel_ref)
     st.markdown("<br>", unsafe_allow_html=True)
 
-    if n_sel_comp > 0:
-        comp_stns = [l.split("|")[0].strip().lstrip("⊕").strip() for l in all_active_labels if l.startswith("⊕")]
-        st.markdown(f'<div class="composite-info-box"><b>🔀 Composite samples:</b> {", ".join(comp_stns)}<br><span>Two superimposed material layers — shown as <b>dashed lines</b>.</span></div>', unsafe_allow_html=True)
-    if n_sel_ref > 0:
-        ref_names = [l.lstrip("★").strip() for l in all_active_labels if l.startswith("★")]
-        st.markdown(f'<div class="ref-info-box"><b>📌 Reference curves:</b> {", ".join(ref_names)}<br><span>Benchmark data — shown as <b>bold gold lines</b>.</span></div>', unsafe_allow_html=True)
+    # 🎨 NOUVEAU: Panneau de personnalisation avant export
+    with st.expander("🛠️ Personnalisation de l'affichage et de l'export HTML", expanded=True):
+        st.info("💡 **Astuce Export HTML :** Réglez l'épaisseur, les marqueurs et les graduations ci-dessous. Une fois le graphique exporté en HTML, vous pourrez encore modifier les titres en cliquant dessus !")
+        c1, c2, c3 = st.columns(3)
+        with c1: main_title = st.text_input("Titre principal", f"Sound Absorption Coefficients ({abs_type.replace('_', ' ').title()})")
+        with c2: x_title = st.text_input("Titre axe X", "Frequency (Hz)")
+        with c3: y_title = st.text_input("Titre axe Y", "Absorption Coefficient α")
+
+        c4, c5, c6 = st.columns(3)
+        with c4: custom_lw = st.slider("Épaisseur des lignes", 1.0, 5.0, 2.5, 0.5)
+        with c5: custom_ms = st.slider("Taille des marqueurs", 0, 15, 6, 1)
+        with c6:
+            show_grid = st.checkbox("Afficher la grille (Grid)", value=True)
+            tick_density = st.radio("Densité des graduations (X)", ["Standard", "Détaillée"], horizontal=True)
 
     FREQ_TICKS = {
         "alpha_cabin": [315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300, 8000, 10000],
         "alpha_kundt": [200, 250, 315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300]
     }
-    ticks = FREQ_TICKS.get(abs_type, sorted(plot_data["frequency"].dropna().unique()))
+    
+    if tick_density == "Standard":
+        ticks = FREQ_TICKS.get(abs_type, sorted(plot_data["frequency"].dropna().unique()))
+    else:
+        # Affiche toutes les fréquences mesurées pour une grille détaillée
+        ticks = sorted(plot_data["frequency"].dropna().unique())
 
     fig = go.Figure()
     color_idx = 0
@@ -499,52 +439,92 @@ with tab1:
         comp_curve = label.startswith("⊕")
 
         if ref_curve:
-            color, line_dash, line_width, marker_sym, marker_sz, hover_tag = REF_COLOR, "solid", 3.5, "star", 10, " <i>(reference)</i>"
+            color, line_dash, line_width, marker_sym, marker_sz, hover_tag = REF_COLOR, "solid", custom_lw + 1.0, "star", custom_ms + 4, " <i>(reference)</i>"
         elif comp_curve:
-            color, line_dash, line_width, marker_sym, marker_sz, hover_tag = COLORS[color_idx % len(COLORS)], "dash", 2.8, "diamond", 7, " <i>(composite)</i>"; color_idx += 1
+            color, line_dash, line_width, marker_sym, marker_sz, hover_tag = COLORS[color_idx % len(COLORS)], "dash", custom_lw, "diamond", custom_ms + 1, " <i>(composite)</i>"; color_idx += 1
         else:
-            color, line_dash, line_width, marker_sym, marker_sz, hover_tag = COLORS[color_idx % len(COLORS)], "solid", 2.5, "circle", 6, ""; color_idx += 1
+            color, line_dash, line_width, marker_sym, marker_sz, hover_tag = COLORS[color_idx % len(COLORS)], "solid", custom_lw, "circle", custom_ms, ""; color_idx += 1
 
         fig.add_trace(go.Scatter(
-            x=sub["frequency"], y=sub[abs_type], mode="lines+markers", name=label,
+            x=sub["frequency"], y=sub[abs_type], mode="lines+markers" if custom_ms > 0 else "lines", name=label,
             line=dict(color=color, width=line_width, dash=line_dash), marker=dict(color=color, size=marker_sz, symbol=marker_sym),
             hovertemplate=f"<b>%{{fullData.name}}</b><br>Freq: %{{x}} Hz<br>α: %{{y:.3f}}{hover_tag}<extra></extra>"
         ))
 
     fig.update_layout(
-        title=f"Sound Absorption Coefficients ({abs_type.replace('_', ' ').title()})",
-        xaxis=dict(title="Frequency (Hz)", type="log", tickmode="array", tickvals=ticks, ticktext=[str(t) for t in ticks], showgrid=True, gridcolor="#e2e8f0"),
-        yaxis=dict(title="Absorption Coefficient α", range=[-0.05, 1.1], showgrid=True, gridcolor="#e2e8f0"),
+        title=main_title,
+        xaxis=dict(title=x_title, type="log", tickmode="array", tickvals=ticks, ticktext=[str(t) for t in ticks], showgrid=show_grid, gridcolor="#e2e8f0"),
+        yaxis=dict(title=y_title, range=[-0.05, 1.1], showgrid=show_grid, gridcolor="#e2e8f0"),
         hovermode="x unified", plot_bgcolor="#ffffff", paper_bgcolor="rgba(0,0,0,0)",
         legend=dict(orientation="h", yanchor="bottom", y=-0.35, xanchor="center", x=0.5), height=640
     )
 
-    st.plotly_chart(fig, width="stretch")
+    # NOUVEAU : Configuration Plotly pour permettre l'édition du texte dans le HTML
+    plotly_config = {
+        'editable': True,
+        'edits': {
+            'titleText': True,
+            'axisTitleText': True,
+            'legendText': True
+        },
+        'displayModeBar': True
+    }
 
-    html_bytes = pio.to_html(fig, include_plotlyjs="cdn", full_html=True).encode("utf-8")
+    st.plotly_chart(fig, width="stretch", config=plotly_config)
+
+    html_bytes = pio.to_html(fig, include_plotlyjs="cdn", full_html=True, config=plotly_config).encode("utf-8")
     st.download_button(
-        label="📥 Download chart as HTML",
+        label="📥 Télécharger le graphique (HTML Interactif)",
         data=html_bytes,
         file_name="absorption_curves.html",
         mime="text/html",
     )
+
 with tab2:
-    st.markdown("### 📥 Download Global Source File")
+    st.markdown("### 📥 Télécharger le fichier source")
     st.download_button(
-        label=f"🟢 Download complete file currently online ({current_filename})",
+        label=f"🟢 Télécharger le fichier complet Excel actuel ({current_filename})",
         data=excel_data,
         file_name=current_filename,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
     st.markdown("---")
 
-    st.markdown("### Screened Dataset")
-    extra_cols = [c for c in ["is_ref", "is_composite"] if c in plot_data.columns]
-    show_cols  = [c for c in ["stn", "curve_label"] + extra_cols + ["frequency", abs_type] if c in plot_data.columns]
-    grp_cols   = ["stn", "curve_label"] + extra_cols + ["frequency"]
-    raw_output = plot_data[show_cols].groupby(grp_cols, as_index=False)[abs_type].mean().sort_values(["stn", "frequency"])
-    raw_output = raw_output.rename(columns={"is_composite": "Composite", "is_ref": "Reference"})
+    st.markdown("### 📊 Données formatées pour Export")
+    st.caption("Le tableau ci-dessous a été restructuré. **Cliquez dessus, puis utilisez l'icône 'Copier' (en haut à droite) pour tout coller directement dans Excel !**")
+    
+    # Préparation des données (Pivot Table)
+    pivot_data = plot_data.groupby(['frequency', 'curve_label'], as_index=False)[abs_type].mean()
+    wide_df = pivot_data.pivot(index="frequency", columns="curve_label", values=abs_type).reset_index()
+    wide_df.columns.name = None # Nettoyage de l'index de colonne
+    wide_df = wide_df.rename(columns={"frequency": "Fréquence (Hz)"})
+    
+    # Affichage interactif avec bouton de copie natif
+    st.dataframe(wide_df, use_container_width=True, hide_index=True)
+    
+    # NOUVEAU: Génération Excel Directe avec cellules formatées
+    output_excel = io.BytesIO()
+    with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
+        wide_df.to_excel(writer, index=False, sheet_name='Absorptions')
+        worksheet = writer.sheets['Absorptions']
+        
+        # Ajustement automatique de la largeur des colonnes
+        for col in worksheet.columns:
+            max_length = 0
+            column_letter = col[0].column_letter
+            for cell in col:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            worksheet.column_dimensions[column_letter].width = max_length + 2
 
-    st.dataframe(raw_output, width="stretch", hide_index=True)
-    csv = raw_output.to_csv(index=False).encode("utf-8")
-    st.download_button("📥 Export Current Table (.CSV)", csv, "filtered_data.csv", "text/csv")
+    excel_bytes = output_excel.getvalue()
+    
+    st.download_button(
+        label="📥 Exporter directement en tableau Excel (.xlsx)",
+        data=excel_bytes,
+        file_name="export_donnees_absorption.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
