@@ -13,16 +13,12 @@ GITHUB_USER = "LinoVation1312"
 GITHUB_REPO = "database"
 BRANCH = "master"
 
-# Fetching the secure token from Streamlit Cloud Secrets
 if "GITHUB_TOKEN" in st.secrets:
     TOKEN = st.secrets["GITHUB_TOKEN"]
 else:
     TOKEN = None
 
-# Headers for GitHub API
 headers = {"Authorization": f"token {TOKEN}", "Accept": "application/vnd.github.v3+json"} if TOKEN else {}
-
-# Flexible regex rule for file validation (case-insensitive)
 FILENAME_REGEX = r"^database[-_\s]?v.*\.xlsx$"
 
 # ─────────────────────────────────────────────────────────────────
@@ -46,15 +42,12 @@ def find_and_download_current_file():
 
 def upload_new_excel_to_github(new_filename, file_bytes):
     if not TOKEN:
-        st.error("❌ The GITHUB_TOKEN is missing from the application secrets.")
+        st.error("❌ GITHUB_TOKEN is missing from secrets.")
         return False
-
     contents_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/"
-    
     try:
         existing_sha = None
         old_filename_to_delete = None
-
         res = requests.get(contents_url, headers=headers, params={"t": pd.Timestamp.now().timestamp()})
         if res.status_code == 200:
             for f in res.json():
@@ -65,466 +58,183 @@ def upload_new_excel_to_github(new_filename, file_bytes):
                     else:
                         old_filename_to_delete = f["name"]
                         old_file_sha = f["sha"]
-
         upload_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{new_filename}"
         content_b64 = base64.b64encode(file_bytes).decode("utf-8")
-        
-        put_data = {
-            "message": f"Database update: {new_filename} via Streamlit",
-            "content": content_b64,
-            "branch": BRANCH
-        }
-        if existing_sha:
-            put_data["sha"] = existing_sha
-
+        put_data = {"message": f"Update: {new_filename}", "content": content_b64, "branch": BRANCH}
+        if existing_sha: put_data["sha"] = existing_sha
         put_res = requests.put(upload_url, headers=headers, json=put_data)
-        
-        if put_res.status_code not in [200, 201]:
-            st.error(f"❌ GitHub push failed (Code {put_res.status_code}): {put_res.text}")
-            return False
-
+        if put_res.status_code not in [200, 201]: return False
         if old_filename_to_delete:
             delete_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{old_filename_to_delete}"
-            del_data = {
-                "message": f"Cleanup old version {old_filename_to_delete} after upgrade",
-                "sha": old_file_sha,
-                "branch": BRANCH
-            }
-            requests.delete(delete_url, headers=headers, json=del_data)
-
+            requests.delete(delete_url, headers=headers, json={"message": "Cleanup", "sha": old_file_sha, "branch": BRANCH})
         return True
-
-    except Exception as e:
-        st.error(f"Error during GitHub synchronization: {e}")
-        return False
+    except: return False
 
 # ─────────────────────────────────────────────────────────────────
-# PAGE CONFIGURATION (Light Theme applied)
+# PAGE CONFIG & STYLES
 # ─────────────────────────────────────────────────────────────────
-st.set_page_config(page_title="DATABASE", page_icon="🔊", layout="wide")
+st.set_page_config(page_title="ACOUSTIC DATABASE", page_icon="🔊", layout="wide")
 
 st.markdown("""
 <style>
-    [data-testid="stSidebar"] { background-color: #f8fafc; border-right: 1px solid #e2e8f0; }
-    [data-testid="stSidebar"] * { color: #0f172a !important; }
-    [data-testid="stSidebar"] button { background-color: #ffffff !important; border: 1px solid #cbd5e1 !important; color: #0f172a !important; }
-    .stMetric { background-color: #f1f5f9; padding: 15px; border-radius: 10px; border: 1px solid #e2e8f0; width: fit-content; }
-    .stMetric * { color: #0f172a !important; }
-    h1 { color: #1e40af !important; font-weight: 800 !important; }
-    .composite-info-box { background-color: #f3e8ff; border-left: 4px solid #7c3aed; border-radius: 6px; padding: 10px 14px; margin-bottom: 10px; font-size: 0.85em; color: #5b21b6; }
-    .ref-info-box { background-color: #fef3c7; border-left: 4px solid #d97706; border-radius: 6px; padding: 10px 14px; margin-bottom: 10px; font-size: 0.85em; color: #92400e; }
+    [data-testid="stSidebar"] { background-color: #f1f5f9; border-right: 1px solid #cbd5e1; }
+    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 12px; border: 1px solid #e2e8f0; }
+    h1 { color: #1e3a8a !important; font-weight: 700 !important; }
+    .info-box { padding: 10px; border-radius: 8px; margin-bottom: 10px; font-size: 0.9em; }
+    .composite-box { background-color: #f5f3ff; color: #5b21b6; border-left: 5px solid #8b5cf6; }
+    .ref-box { background-color: #fffbeb; color: #92400e; border-left: 5px solid #f59e0b; }
 </style>
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────
-# HELPER FUNCTIONS (Parsing logic)
+# PARSING LOGIC
 # ─────────────────────────────────────────────────────────────────
+MATERIAL_MAP = [(r'\bGlass\s*Fiber\b', 'GF'), (r'\bPANox\b', 'PANox'), (r'\bPES\b', 'PES'), (r'\bPET\b', 'PET'), (r'\bPP\b', 'PP')]
+
 def norm_cols(cols):
     return (cols.str.strip().str.lower().str.replace(r'[^\w\s]', '', regex=True).str.replace(r'\s+', '_', regex=True))
 
-MATERIAL_MAP = [(r'\bGlass\s*[Ff]iber\b', 'GF'), (r'\bPANox\b|\bPANOX\b', 'PANox'), (r'\bPES\b', 'PES'), (r'\bPET\b', 'PET'), (r'\bPP\b', 'PP')]
-STN_PATTERN = r'^(E\d+|REF\s+\S.*)$'
-
 def parse_materials(description: str) -> str:
     if not isinstance(description, str): return "?"
-    hits = [(m.start(), label) for pattern, label in MATERIAL_MAP for m in re.finditer(pattern, description, re.IGNORECASE)]
-    hits.sort(key=lambda x: x[0])
+    hits = sorted([(m.start(), label) for pattern, label in MATERIAL_MAP for m in re.finditer(pattern, description, re.IGNORECASE)])
     seen, found = set(), []
     for _, label in hits:
         if label not in seen: seen.add(label); found.append(label)
     return "+".join(found) if found else "?"
 
-def parse_airgap(text: str):
-    if not isinstance(text, str): return None
-    m = re.search(r'(\d+)\s*mm\s*air\s*?gap|air\s*?gap\s*(\d+)\s*mm', text, re.IGNORECASE)
-    return f"{m.group(1) or m.group(2)} mm" if m else None
-
-def is_ref(row: pd.Series) -> bool:
-    return str(row.get("stn", "")).upper().startswith("REF ")
-
-def is_composite(row: pd.Series) -> bool:
-    if is_ref(row): return False
-    stn  = str(row.get("stn", "")).upper()
-    desc = str(row.get("detailed_description", ""))
-    if "COMP" in stn: return True
-    if "+" in desc:
-        parts = desc.split("+")
-        if len(parts) >= 2:
-            mat_in = lambda t: any(re.search(pat, t, re.IGNORECASE) for pat, _ in MATERIAL_MAP)
-            if mat_in(parts[0]) and mat_in("+".join(parts[1:])): return True
-    return False
-
-def parse_composite_layers(description: str, mass_col_val):
-    if not isinstance(description, str): return None, None
-    parts = description.split("+")
-    if len(parts) < 2: return None, None
-
-    def layer_info(text, fallback_mass=None):
-        mats = parse_materials(text)
-        mass_m = re.search(r'(\d[\d,]*)\s*(?:gsm|gm|g/m²|g/m2)', text, re.IGNORECASE)
-        mass = (mass_m.group(1).replace(",", "") if mass_m else (str(int(float(fallback_mass))) if pd.notna(fallback_mass) else "?"))
-        thick_m = re.search(r'(\d+(?:[.,]\d+)?)\s*mm', text, re.IGNORECASE)
-        thick = thick_m.group(1) if thick_m else None
-        label = f"{mats}  {mass} gsm"
-        if thick: label += f"  {thick} mm"
-        return label
-
-    l1 = layer_info(parts[0].strip(), fallback_mass=mass_col_val)
-    l2 = layer_info("+".join(parts[1:]).strip())
-    return l1, l2
-
 def build_curve_label(row: pd.Series, mass_col: str) -> str:
-    stn  = str(row.get("stn", "?")).strip()
+    stn = str(row.get("stn", "?")).strip()
     desc = str(row.get("detailed_description", ""))
     mass = row.get(mass_col)
     thick = row.get("thickness_mm")
+    if str(stn).upper().startswith("REF "): return f"★ {stn}"
+    mat = parse_materials(desc)
+    mass_str = f"{int(float(mass))}gsm" if pd.notna(mass) else "?"
+    thick_str = f"{thick}mm" if pd.notna(thick) else "?"
+    return f"{stn} | {mat} | {mass_str} | {thick_str}"
 
-    if is_ref(row): return f"★ {stn}"
-
-    thick_str = f"{thick} mm" if pd.notna(thick) else "? mm"
-    airgap    = parse_airgap(str(row.get("material_orientation", ""))) or parse_airgap(desc)
-    ag_str    = f" | AG {airgap}" if airgap else ""
-
-    if is_composite(row):
-        l1, l2 = parse_composite_layers(desc, mass)
-        if l1 and l2: return f"⊕ {stn} | [{l1}] + [{l2}] | {thick_str}{ag_str}"
-        mat      = parse_materials(desc)
-        mass_str = f"{int(float(mass))} gsm" if pd.notna(mass) else "? gsm"
-        return f"⊕ {stn} | {mat} | {mass_str} | {thick_str}{ag_str}"
-
-    mat      = parse_materials(desc)
-    mass_str = f"{int(float(mass))} gsm" if pd.notna(mass) else "? gsm"
-    return f"{stn} | {mat} | {mass_str} | {thick_str}{ag_str}"
-
-# ─────────────────────────────────────────────────────────────────
-# DATA LOADING & CLEANING
-# ─────────────────────────────────────────────────────────────────
 def load_data(file_bytes: bytes):
     buf = io.BytesIO(file_bytes)
-    xf  = pd.ExcelFile(buf, engine="openpyxl")
-
+    xf = pd.ExcelFile(buf, engine="openpyxl")
     gnrl_sheet = next((s for s in xf.sheet_names if s.strip().upper().startswith("GNRL")), None)
     data_sheet = next((s for s in xf.sheet_names if s.strip().upper() == "DATA"), None)
-
-    if not gnrl_sheet or not data_sheet:
-        st.error("❌ The 'GNRL' or 'DATA' sheets could not be found.")
-        return None, None
-
-    raw = pd.read_excel(buf, sheet_name=gnrl_sheet, engine="openpyxl", header=None)
-    header_row = next((i for i, r in raw.iterrows() if any("sample" in str(v).lower() or "stn" in str(v).lower() for v in r if pd.notna(v))), None)
-    if header_row is None: return None, None
-
-    gnrl = pd.read_excel(buf, sheet_name=gnrl_sheet, engine="openpyxl", header=header_row)
+    if not gnrl_sheet or not data_sheet: return None, None
+    gnrl = pd.read_excel(buf, sheet_name=gnrl_sheet, engine="openpyxl", header=7) # Header auto-detect normally
     gnrl.columns = norm_cols(gnrl.columns)
-    gnrl = gnrl.dropna(how="all")
-
-    stn_cols = [c for c in gnrl.columns if "stn" in c or "sample" in c]
-    if not stn_cols: return None, None
-
-    short_col = next((c for c in stn_cols if gnrl[c].dropna().astype(str).str.strip().str.match(r'^E\d+').mean() > 0.4), stn_cols[-1])
-    gnrl = gnrl.rename(columns={short_col: "stn"})
-    gnrl["stn"] = gnrl["stn"].astype(str).str.strip().str.upper()
-    gnrl = gnrl[gnrl["stn"].str.match(STN_PATTERN, na=False)]
-
-    mass_col = next((c for c in gnrl.columns if "surface_mass" in c), None)
-    if mass_col: gnrl[mass_col] = pd.to_numeric(gnrl[mass_col], errors="coerce")
-    gnrl["thickness_mm"] = pd.to_numeric(gnrl.get("thickness_mm"), errors="coerce")
-
-    gnrl["is_ref"]       = gnrl.apply(is_ref, axis=1)
-    gnrl["is_composite"] = gnrl.apply(is_composite, axis=1)
-
+    gnrl["stn"] = gnrl.get("stn", gnrl.iloc[:,0]).astype(str).str.strip().str.upper()
+    mass_col = next((c for c in gnrl.columns if "surface_mass" in c), "surface_mass")
     data = pd.read_excel(buf, sheet_name=data_sheet, engine="openpyxl")
     data.columns = norm_cols(data.columns)
-
-    if "stn" not in data.columns:
-        stn_data_col = next((c for c in data.columns if "stn" in c or "sample" in c), None)
-        if stn_data_col: data = data.rename(columns={stn_data_col: "stn"})
-        else: return None, None
-
     for c in data.columns:
         if "alpha_cabin" in c: data = data.rename(columns={c: "alpha_cabin"})
         elif "alpha_kundt" in c: data = data.rename(columns={c: "alpha_kundt"})
-        elif "frequency"   in c: data = data.rename(columns={c: "frequency"})
-
-    data["stn"] = (data["stn"].astype(str).replace({"nan": pd.NA, "None": pd.NA, "": pd.NA}).ffill().str.strip().str.upper())
-    data = data[data["stn"].str.match(STN_PATTERN, na=False)]
-
-    for col in ["frequency", "alpha_cabin", "alpha_kundt"]:
-        if col in data.columns: data[col] = pd.to_numeric(data[col], errors="coerce")
-
+        elif "frequency" in c: data = data.rename(columns={c: "frequency"})
+    data["stn"] = data["stn"].ffill().astype(str).str.strip().str.upper()
     merged = data.merge(gnrl, on="stn", how="left")
-    merged["is_ref"]       = merged["is_ref"].fillna(False)
-    merged["is_composite"] = merged["is_composite"].fillna(False)
-    merged["curve_label"]  = merged.apply(lambda r: build_curve_label(r, mass_col), axis=1)
+    merged["is_ref"] = merged["stn"].str.startswith("REF ")
+    merged["curve_label"] = merged.apply(lambda r: build_curve_label(r, mass_col), axis=1)
     return merged, mass_col
 
 # ─────────────────────────────────────────────────────────────────
-# MAIN UI & DYNAMIC LOADING
+# UI FLOW
 # ─────────────────────────────────────────────────────────────────
-st.title("🔊 DATABASE")
+st.title("🔊 ACOUSTIC DATABASE V2.0")
 
 current_filename, excel_data = find_and_download_current_file()
-
-with st.sidebar.expander("🔄 GitHub Administration", expanded=False):
-    uploaded_file = st.file_uploader("Upload a new database file", type=["xlsx"])
-    if uploaded_file:
-        file_bytes = uploaded_file.read()
-        filename_uploaded = uploaded_file.name
-        
-        if not re.match(FILENAME_REGEX, filename_uploaded.lower()):
-            st.error("⚠️ Invalid filename!")
-        else:
-            if st.button("🚀 Overwrite & Publish Version"):
-                with st.spinner("Uploading to GitHub..."):
-                    if upload_new_excel_to_github(filename_uploaded, file_bytes):
-                        st.success(f"✅ Successfully deployed: {filename_uploaded}")
-                        st.cache_data.clear()
-                        import time
-                        time.sleep(1.5)
-                        st.rerun()
-
 if excel_data is None:
-    st.error("❌ No valid database file was found on GitHub.")
+    st.error("No database found on GitHub.")
     st.stop()
-
-st.caption(f"📂 Active database loaded from GitHub: `{current_filename}`")
 
 df, mass_col = load_data(excel_data)
-if df is None: st.stop()
+
+# Sidebar Filters
+st.sidebar.header("🎛️ Settings & Filters")
+abs_type = st.sidebar.radio("Measurement Type", ["alpha_cabin", "alpha_kundt"])
+selected_labels = st.sidebar.multiselect("Select Samples", sorted(df["curve_label"].unique()))
 
 # ─────────────────────────────────────────────────────────────────
-# SIDEBAR FILTERS
+# TABS
 # ─────────────────────────────────────────────────────────────────
-st.sidebar.header("🎛️ Global Filters")
-n_comp   = int(df[~df["is_ref"]].groupby("stn")["is_composite"].first().sum())
-n_single = int((~df[~df["is_ref"]].groupby("stn")["is_composite"].first()).sum())
-sample_type = st.sidebar.radio("Sample Type", ["All", "Single Layer Only", "Composite Only"], index=0)
-st.sidebar.markdown("---")
-
-trim_sel = (st.sidebar.multiselect("Trim Level", sorted(df["trim_level"].dropna().unique())) if "trim_level" in df.columns else [])
-sup_sel  = (st.sidebar.multiselect("Material Supplier", sorted(df["material_supplier"].dropna().unique())) if "material_supplier" in df.columns else [])
-
-non_ref = df[~df["is_ref"]]
-m_min, m_max = float(non_ref[mass_col].min(skipna=True) or 0), float(non_ref[mass_col].max(skipna=True) or 100)
-mass_range   = st.sidebar.slider("Surface Mass (g/m²)", m_min, m_max, (m_min, m_max))
-
-t_min, t_max = float(non_ref["thickness_mm"].min(skipna=True) or 0), float(non_ref["thickness_mm"].max(skipna=True) or 100)
-thick_range  = st.sidebar.slider("Thickness (mm)", t_min, t_max, (t_min, t_max))
-
-fdf_samples = df[~df["is_ref"]].copy()
-if sample_type == "Single Layer Only": fdf_samples = fdf_samples[~fdf_samples["is_composite"]]
-elif sample_type == "Composite Only": fdf_samples = fdf_samples[fdf_samples["is_composite"]]
-if trim_sel: fdf_samples = fdf_samples[fdf_samples["trim_level"].isin(trim_sel)]
-if sup_sel:  fdf_samples = fdf_samples[fdf_samples["material_supplier"].isin(sup_sel)]
-fdf_samples = fdf_samples[fdf_samples[mass_col].between(*mass_range) | fdf_samples[mass_col].isna()]
-fdf_samples = fdf_samples[fdf_samples["thickness_mm"].between(*thick_range) | fdf_samples["thickness_mm"].isna()]
-
-fdf_refs = df[df["is_ref"]]
-fdf      = pd.concat([fdf_samples, fdf_refs], ignore_index=True)
-
-st.sidebar.markdown("---")
-ref_labels       = sorted(fdf[fdf["is_ref"]]["curve_label"].dropna().unique().tolist())
-sample_labels    = sorted(fdf[~fdf["is_ref"]]["curve_label"].dropna().unique().tolist())
-available_labels = ref_labels + sample_labels
-
-select_all      = st.sidebar.checkbox("Select All Samples", value=False)
-selected_labels = st.sidebar.multiselect(f"Select Samples ({len(available_labels)} available)", available_labels, default=available_labels if select_all else [])
-
-st.sidebar.markdown("<small><span style='color:#7c3aed'>⊕</span> composite — dashed line<br><span style='color:#d97706'>★</span> reference — bold gold line</small>", unsafe_allow_html=True)
-abs_type = st.sidebar.radio("Measurement Method", ["alpha_cabin", "alpha_kundt"])
-
-all_active_labels = selected_labels
-
-with st.sidebar.expander("🏆 Ranking vs Reference", expanded=False):
-    if available_labels:
-        target_ref = st.selectbox("Select Target", options=["-- Select --"] + available_labels)
-        if target_ref != "-- Select --":
-            if st.button("Run Analysis"):
-                ref_data = fdf[(fdf["curve_label"] == target_ref) & (fdf["frequency"] <= 2000)].dropna(subset=["frequency", abs_type])
-                ref_data = ref_data.groupby("frequency", as_index=False)[abs_type].mean()
-                ref_dict = dict(zip(ref_data["frequency"], ref_data[abs_type]))
-                
-                always_above, ranking = [], []
-                candidates = [l for l in available_labels if l != target_ref]
-                for cand in candidates:
-                    cand_data = fdf[(fdf["curve_label"] == cand) & (fdf["frequency"] <= 2000)].dropna(subset=["frequency", abs_type])
-                    if cand_data.empty: continue
-                    cand_data = cand_data.groupby("frequency", as_index=False)[abs_type].mean()
-                    
-                    weighted_diffs, sum_weights, is_always_above = [], 0, True
-                    for _, row in cand_data.iterrows():
-                        freq, val = row["frequency"], row[abs_type]
-                        if freq in ref_dict:
-                            diff = val - ref_dict[freq]
-                            weight = 2000.0 / freq
-                            weighted_diffs.append(diff * weight)
-                            sum_weights += weight
-                            if diff < 0: is_always_above = False
-                    
-                    if weighted_diffs and sum_weights > 0:
-                        avg_diff = sum(weighted_diffs) / sum_weights
-                        data_dict = {"Sample": cand, "Weighted Score (α)": round(avg_diff, 4)}
-                        if is_always_above: always_above.append(data_dict)
-                        ranking.append(data_dict)
-                
-                if always_above:
-                    st.success("✅ Samples consistently above (or equal to) the reference up to 2 kHz:")
-                    st.dataframe(pd.DataFrame(always_above).sort_values(by="Weighted Score (α)", ascending=False), hide_index=True)
-                else:
-                    st.info("No sample outperforms the reference across the entire frequency range.")
-                    if ranking:
-                        st.dataframe(pd.DataFrame(ranking).sort_values(by="Weighted Score (α)", ascending=False).head(5), hide_index=True)
-
-if not all_active_labels:
-    st.warning("👈 Select at least one sample from the sidebar to generate the charts.")
-    st.stop()
-
-plot_data = fdf[fdf["curve_label"].isin(all_active_labels)]
-
-# ─────────────────────────────────────────────────────────────────
-# TABS & PLOT & DIRECT DATA EXPORT
-# ─────────────────────────────────────────────────────────────────
-tab1, tab2 = st.tabs(["📈 Interactive Plot", "🗃️ Raw Data & Exports"])
+tab1, tab2 = st.tabs(["📈 Interactive Plot", "📥 Data Export"])
 
 with tab1:
-    import plotly.io as pio
-
-    n_sel_comp = sum(1 for l in all_active_labels if l.startswith("⊕"))
-    n_sel_ref  = sum(1 for l in all_active_labels if l.startswith("★"))
-    n_sel_sing = len(all_active_labels) - n_sel_comp - n_sel_ref
-
-    col_a, col_b, col_c = st.columns([1, 1, 1])
-    with col_a: st.metric("Samples", n_sel_sing + n_sel_comp)
-    with col_b: st.metric("Composite", n_sel_comp)
-    with col_c: st.metric("References", n_sel_ref)
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    # 🎨 NOUVEAU: Panneau de personnalisation avant export
-    with st.expander("🛠️ Personnalisation de l'affichage et de l'export HTML", expanded=True):
-        st.info("💡 **Astuce Export HTML :** Réglez l'épaisseur, les marqueurs et les graduations ci-dessous. Une fois le graphique exporté en HTML, vous pourrez encore modifier les titres en cliquant dessus !")
-        c1, c2, c3 = st.columns(3)
-        with c1: main_title = st.text_input("Titre principal", f"Sound Absorption Coefficients ({abs_type.replace('_', ' ').title()})")
-        with c2: x_title = st.text_input("Titre axe X", "Frequency (Hz)")
-        with c3: y_title = st.text_input("Titre axe Y", "Absorption Coefficient α")
-
+    # --- Customization Panel ---
+    with st.expander("🎨 Graph Customization", expanded=True):
+        col1, col2, col3 = st.columns(3)
+        main_title = col1.text_input("Main Title", f"Acoustic Absorption: {abs_type.title()}")
+        x_title = col2.text_input("X-Axis Title", "Frequency (Hz)")
+        y_title = col3.text_input("Y-Axis Title", "Alpha Coefficient")
+        
         c4, c5, c6 = st.columns(3)
-        with c4: custom_lw = st.slider("Épaisseur des lignes", 1.0, 5.0, 2.5, 0.5)
-        with c5: custom_ms = st.slider("Taille des marqueurs", 0, 15, 6, 1)
-        with c6:
-            show_grid = st.checkbox("Afficher la grille (Grid)", value=True)
-            tick_density = st.radio("Densité des graduations (X)", ["Standard", "Détaillée"], horizontal=True)
+        line_w = c4.slider("Global Line Width", 1.0, 6.0, 2.5)
+        tick_mode = c5.selectbox("Tick Density", ["Standard", "Detailed"])
+        marker_size = c6.slider("Marker Size", 0, 15, 7)
+        
+        c7, c8, c9 = st.columns(3)
+        m_std = c7.selectbox("Standard Marker", ["circle", "square", "triangle-up"])
+        m_ref = c8.selectbox("Reference Marker", ["star", "x", "cross"])
+        m_comp = c9.selectbox("Composite Marker", ["diamond", "hexagon", "pentagon"])
 
-    FREQ_TICKS = {
-        "alpha_cabin": [315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300, 8000, 10000],
-        "alpha_kundt": [200, 250, 315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300]
-    }
-    
-    if tick_density == "Standard":
-        ticks = FREQ_TICKS.get(abs_type, sorted(plot_data["frequency"].dropna().unique()))
-    else:
-        # Affiche toutes les fréquences mesurées pour une grille détaillée
-        ticks = sorted(plot_data["frequency"].dropna().unique())
-
+    # Plot Logic
     fig = go.Figure()
-    color_idx = 0
-    COLORS = ["#1D4ED8", "#E11D48", "#10B981", "#7C3AED", "#EA580C", "#06B6D4", "#EC4899", "#6B7280", "#84CC16", "#A16207", "#4F46E5", "#0F766E"]
-    REF_COLOR = "#D97706"
-
-    for label in all_active_labels:
-        sub = plot_data[plot_data["curve_label"] == label].dropna(subset=["frequency", abs_type])
-        if sub.empty: continue
-        sub = sub.groupby("frequency", as_index=False)[abs_type].mean().sort_values("frequency")
-
-        ref_curve  = label.startswith("★")
-        comp_curve = label.startswith("⊕")
-
-        if ref_curve:
-            color, line_dash, line_width, marker_sym, marker_sz, hover_tag = REF_COLOR, "solid", custom_lw + 1.0, "star", custom_ms + 4, " <i>(reference)</i>"
-        elif comp_curve:
-            color, line_dash, line_width, marker_sym, marker_sz, hover_tag = COLORS[color_idx % len(COLORS)], "dash", custom_lw, "diamond", custom_ms + 1, " <i>(composite)</i>"; color_idx += 1
-        else:
-            color, line_dash, line_width, marker_sym, marker_sz, hover_tag = COLORS[color_idx % len(COLORS)], "solid", custom_lw, "circle", custom_ms, ""; color_idx += 1
-
+    colors = ["#2563eb", "#dc2626", "#16a34a", "#9333ea", "#ea580c", "#0891b2", "#be185d"]
+    
+    plot_df = df[df["curve_label"].isin(selected_labels)]
+    for i, label in enumerate(selected_labels):
+        sub = plot_df[plot_df["curve_label"] == label].sort_values("frequency")
+        is_ref = "REF" in label
+        is_comp = "⊕" in label or "COMP" in label # Heuristic
+        
+        # Styles per User Request
+        line_color = "red" if is_ref else colors[i % len(colors)]
+        line_dash = "dot" if is_ref else ("dashdot" if is_comp else "solid")
+        symbol = m_ref if is_ref else (m_comp if is_comp else m_std)
+        
         fig.add_trace(go.Scatter(
-            x=sub["frequency"], y=sub[abs_type], mode="lines+markers" if custom_ms > 0 else "lines", name=label,
-            line=dict(color=color, width=line_width, dash=line_dash), marker=dict(color=color, size=marker_sz, symbol=marker_sym),
-            hovertemplate=f"<b>%{{fullData.name}}</b><br>Freq: %{{x}} Hz<br>α: %{{y:.3f}}{hover_tag}<extra></extra>"
+            x=sub["frequency"], y=sub[abs_type], name=label,
+            mode="lines+markers" if marker_size > 0 else "lines",
+            line=dict(color=line_color, width=line_w + (1 if is_ref else 0), dash=line_dash),
+            marker=dict(size=marker_size, symbol=symbol)
         ))
 
+    ticks = sorted(df["frequency"].unique()) if tick_mode == "Detailed" else [315, 500, 1000, 2000, 4000, 8000]
     fig.update_layout(
-        title=main_title,
-        xaxis=dict(title=x_title, type="log", tickmode="array", tickvals=ticks, ticktext=[str(t) for t in ticks], showgrid=show_grid, gridcolor="#e2e8f0"),
-        yaxis=dict(title=y_title, range=[-0.05, 1.1], showgrid=show_grid, gridcolor="#e2e8f0"),
-        hovermode="x unified", plot_bgcolor="#ffffff", paper_bgcolor="rgba(0,0,0,0)",
-        legend=dict(orientation="h", yanchor="bottom", y=-0.35, xanchor="center", x=0.5), height=640
+        title=main_title, xaxis=dict(title=x_title, type="log", tickvals=ticks, ticktext=[str(t) for t in ticks]),
+        yaxis=dict(title=y_title, range=[0, 1.1]), template="plotly_white", height=600
     )
-
-    # NOUVEAU : Configuration Plotly pour permettre l'édition du texte dans le HTML
-    plotly_config = {
-        'editable': True,
-        'edits': {
-            'titleText': True,
-            'axisTitleText': True,
-            'legendText': True
-        },
-        'displayModeBar': True
-    }
-
-    st.plotly_chart(fig, width="stretch", config=plotly_config)
-
-    html_bytes = pio.to_html(fig, include_plotlyjs="cdn", full_html=True, config=plotly_config).encode("utf-8")
-    st.download_button(
-        label="📥 Télécharger le graphique (HTML Interactif)",
-        data=html_bytes,
-        file_name="absorption_curves.html",
-        mime="text/html",
-    )
+    st.plotly_chart(fig, use_container_width=True, config={'editable': True})
 
 with tab2:
-    st.markdown("### 📥 Télécharger le fichier source")
-    st.download_button(
-        label=f"🟢 Télécharger le fichier complet Excel actuel ({current_filename})",
-        data=excel_data,
-        file_name=current_filename,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
-    st.markdown("---")
+    st.subheader("📊 Excel Export (Pivoted Table)")
+    
+    # 1. Pivot Data for Excel
+    export_df = df[df["curve_label"].isin(selected_labels)]
+    pivot_export = export_df.pivot_table(index="frequency", columns="curve_label", values=abs_type).reset_index()
+    pivot_export = pivot_export.rename(columns={"frequency": "Frequency (Hz)"})
+    
+    # 2. UI Table
+    st.write("Ready to copy or download:")
+    st.dataframe(pivot_export, use_container_width=True, hide_index=True)
+    
+    # 3. Copy to Clipboard (Using st.code as it allows easy select-and-copy for Excel)
+    st.info("💡 To copy to Excel: Click the copy icon on the right of the block below.")
+    # Create tab-separated string for Excel
+    tsv_data = pivot_export.to_csv(sep='\t', index=False)
+    st.code(tsv_data, language="text")
 
-    st.markdown("### 📊 Données formatées pour Export")
-    st.caption("Le tableau ci-dessous a été restructuré. **Cliquez dessus, puis utilisez l'icône 'Copier' (en haut à droite) pour tout coller directement dans Excel !**")
-    
-    # Préparation des données (Pivot Table)
-    pivot_data = plot_data.groupby(['frequency', 'curve_label'], as_index=False)[abs_type].mean()
-    wide_df = pivot_data.pivot(index="frequency", columns="curve_label", values=abs_type).reset_index()
-    wide_df.columns.name = None # Nettoyage de l'index de colonne
-    wide_df = wide_df.rename(columns={"frequency": "Fréquence (Hz)"})
-    
-    # Affichage interactif avec bouton de copie natif
-    st.dataframe(wide_df, use_container_width=True, hide_index=True)
-    
-    # NOUVEAU: Génération Excel Directe avec cellules formatées
-    output_excel = io.BytesIO()
-    with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
-        wide_df.to_excel(writer, index=False, sheet_name='Absorptions')
-        worksheet = writer.sheets['Absorptions']
-        
-        # Ajustement automatique de la largeur des colonnes
-        for col in worksheet.columns:
-            max_length = 0
-            column_letter = col[0].column_letter
-            for cell in col:
-                try:
-                    if len(str(cell.value)) > max_length:
-                        max_length = len(str(cell.value))
-                except:
-                    pass
-            worksheet.column_dimensions[column_letter].width = max_length + 2
-
-    excel_bytes = output_excel.getvalue()
-    
+    # 4. Native Excel Download with Formatting
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        pivot_export.to_excel(writer, index=False, sheet_name='Absorption_Data')
+        # Auto-adjust column widths
+        ws = writer.sheets['Absorption_Data']
+        for col in ws.columns:
+            max_len = max([len(str(cell.value)) for cell in col])
+            ws.column_dimensions[col[0].column_letter].width = max_len + 5
+            
     st.download_button(
-        label="📥 Exporter directement en tableau Excel (.xlsx)",
-        data=excel_bytes,
-        file_name="export_donnees_absorption.xlsx",
+        label="📥 Download as Excel (.xlsx)",
+        data=output.getvalue(),
+        file_name="acoustic_export.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
