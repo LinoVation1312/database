@@ -5,6 +5,7 @@ import io
 import re
 import requests
 import base64
+import openpyxl
 
 # ─────────────────────────────────────────────────────────────────
 # GITHUB CONFIGURATION
@@ -13,16 +14,12 @@ GITHUB_USER = "LinoVation1312"
 GITHUB_REPO = "database"
 BRANCH = "master"
 
-# Fetching the secure token from Streamlit Cloud Secrets
 if "GITHUB_TOKEN" in st.secrets:
     TOKEN = st.secrets["GITHUB_TOKEN"]
 else:
     TOKEN = None
 
-# Headers for GitHub API
 headers = {"Authorization": f"token {TOKEN}", "Accept": "application/vnd.github.v3+json"} if TOKEN else {}
-
-# Flexible regex rule for file validation (case-insensitive)
 FILENAME_REGEX = r"^database[-_\s]?v.*\.xlsx$"
 
 # ─────────────────────────────────────────────────────────────────
@@ -44,13 +41,12 @@ def find_and_download_current_file():
     except Exception as e:
         return None, None
 
-def upload_new_excel_to_github(new_filename, file_bytes):
+def upload_new_excel_to_github(new_filename, file_bytes, commit_message="Database update via Streamlit"):
     if not TOKEN:
         st.error("❌ The GITHUB_TOKEN is missing from the application secrets.")
         return False
 
     contents_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/"
-    
     try:
         existing_sha = None
         old_filename_to_delete = None
@@ -70,12 +66,11 @@ def upload_new_excel_to_github(new_filename, file_bytes):
         content_b64 = base64.b64encode(file_bytes).decode("utf-8")
         
         put_data = {
-            "message": f"Database update: {new_filename} via Streamlit",
+            "message": commit_message,
             "content": content_b64,
             "branch": BRANCH
         }
-        if existing_sha:
-            put_data["sha"] = existing_sha
+        if existing_sha: put_data["sha"] = existing_sha
 
         put_res = requests.put(upload_url, headers=headers, json=put_data)
         
@@ -99,7 +94,7 @@ def upload_new_excel_to_github(new_filename, file_bytes):
         return False
 
 # ─────────────────────────────────────────────────────────────────
-# PAGE CONFIGURATION (Light Theme applied)
+# PAGE CONFIGURATION
 # ─────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="DATABASE", page_icon="🔊", layout="wide")
 
@@ -107,9 +102,7 @@ st.markdown("""
 <style>
     [data-testid="stSidebar"] { background-color: #f8fafc; border-right: 1px solid #e2e8f0; }
     [data-testid="stSidebar"] * { color: #0f172a !important; }
-    [data-testid="stSidebar"] button { background-color: #ffffff !important; border: 1px solid #cbd5e1 !important; color: #0f172a !important; }
     .stMetric { background-color: #f1f5f9; padding: 15px; border-radius: 10px; border: 1px solid #e2e8f0; width: fit-content; }
-    .stMetric * { color: #0f172a !important; }
     h1 { color: #1e40af !important; font-weight: 800 !important; }
 </style>
 """, unsafe_allow_html=True)
@@ -205,24 +198,21 @@ def load_data(file_bytes: bytes):
     abs_sheet  = next((s for s in xf.sheet_names if s.strip().upper() == "ABSORPTION"), None)
     stl_sheet  = next((s for s in xf.sheet_names if s.strip().upper() == "STL"), None)
 
-    if not gnrl_sheet:
-        st.error("❌ The 'GNRL' sheet could not be found.")
-        return None, None, None
-
-    if not abs_sheet and not stl_sheet:
-        st.error("❌ Neither 'ABSORPTION' nor 'STL' sheets could be found.")
-        return None, None, None
+    if not gnrl_sheet: return None, None, None, None
+    
+    # Store exact sheet names for appending later
+    sheet_names = {"GNRL": gnrl_sheet, "ABS": abs_sheet, "STL": stl_sheet}
 
     raw = pd.read_excel(buf, sheet_name=gnrl_sheet, engine="openpyxl", header=None)
     header_row = next((i for i, r in raw.iterrows() if any("sample" in str(v).lower() or "stn" in str(v).lower() for v in r if pd.notna(v))), None)
-    if header_row is None: return None, None, None
+    if header_row is None: return None, None, None, None
 
     gnrl = pd.read_excel(buf, sheet_name=gnrl_sheet, engine="openpyxl", header=header_row)
     gnrl.columns = norm_cols(gnrl.columns)
     gnrl = gnrl.dropna(how="all")
 
     stn_cols = [c for c in gnrl.columns if "stn" in c or "sample" in c]
-    if not stn_cols: return None, None, None
+    if not stn_cols: return None, None, None, None
 
     short_col = next((c for c in stn_cols if gnrl[c].dropna().astype(str).str.strip().str.match(r'^E\d+').mean() > 0.4), stn_cols[-1])
     gnrl = gnrl.rename(columns={short_col: "stn"})
@@ -247,7 +237,6 @@ def load_data(file_bytes: bytes):
             else: return pd.DataFrame()
 
         for c in data.columns:
-            # Important to check STL specifically first to not clash with plain alpha_cabin
             if "stl" in c or "alpha_cabin_stl" in c: data = data.rename(columns={c: "alpha_cabin_stl"})
             elif "alpha_cabin" in c: data = data.rename(columns={c: "alpha_cabin"})
             elif "alpha_kundt" in c: data = data.rename(columns={c: "alpha_kundt"})
@@ -268,7 +257,7 @@ def load_data(file_bytes: bytes):
     df_abs = process_data_sheet(abs_sheet)
     df_stl = process_data_sheet(stl_sheet)
 
-    return df_abs, df_stl, mass_col
+    return df_abs, df_stl, gnrl, sheet_names
 
 # ─────────────────────────────────────────────────────────────────
 # MAIN UI & DYNAMIC LOADING
@@ -282,17 +271,12 @@ with st.sidebar.expander("🔄 GitHub Administration", expanded=False):
     if uploaded_file:
         file_bytes = uploaded_file.read()
         filename_uploaded = uploaded_file.name
-        
-        if not re.match(FILENAME_REGEX, filename_uploaded.lower()):
-            st.error("⚠️ Invalid filename!")
-        else:
+        if re.match(FILENAME_REGEX, filename_uploaded.lower()):
             if st.button("🚀 Overwrite & Publish Version"):
                 with st.spinner("Uploading to GitHub..."):
                     if upload_new_excel_to_github(filename_uploaded, file_bytes):
-                        st.success(f"✅ Successfully deployed: {filename_uploaded}")
+                        st.success("✅ Upload successful!")
                         st.cache_data.clear()
-                        import time
-                        time.sleep(1.5)
                         st.rerun()
 
 if excel_data is None:
@@ -301,8 +285,10 @@ if excel_data is None:
 
 st.caption(f"📂 Active database loaded from GitHub: `{current_filename}`")
 
-df_abs, df_stl, mass_col = load_data(excel_data)
-if df_abs is None: st.stop()
+df_abs, df_stl, df_gnrl, sheet_names = load_data(excel_data)
+if df_gnrl is None: st.stop()
+
+mass_col = next((c for c in df_gnrl.columns if "surface_mass" in c), "surface_mass_gsm")
 
 # ─────────────────────────────────────────────────────────────────
 # SIDEBAR FILTERS
@@ -311,301 +297,216 @@ st.sidebar.header("📁 Data Category")
 data_options = []
 if not df_abs.empty: data_options.append("Absorption")
 if not df_stl.empty: data_options.append("STL")
+data_type = st.sidebar.radio("Select Category to Analyze", data_options) if data_options else None
 
-if not data_options:
-    st.error("❌ No valid data found in the 'ABSORPTION' or 'STL' sheets.")
-    st.stop()
-
-data_type = st.sidebar.radio("Select Category to Analyze", data_options)
-
-st.sidebar.header("🎛️ Global Filters")
-
-# Dynamically select df based on user choice
 if data_type == "Absorption":
     df = df_abs
     available_methods = [c for c in ["alpha_cabin", "alpha_kundt"] if c in df.columns]
     abs_type = st.sidebar.radio("Measurement Method", available_methods) if available_methods else None
-    y_range_limit = [-0.05, 1.1]
-    y_title_default = "Absorption Coefficient α"
-    main_title_default = f"Sound Absorption Coefficients ({abs_type.replace('_', ' ').title()})" if abs_type else "Sound Absorption"
-else:
+elif data_type == "STL":
     df = df_stl
     available_methods = [c for c in ["alpha_cabin_stl"] if c in df.columns]
     abs_type = st.sidebar.radio("Measurement Method", available_methods) if available_methods else "alpha_cabin_stl"
-    y_range_limit = None # Let Plotly auto-scale based on dB outputs
-    y_title_default = "Sound Transmission Loss (dB)"
-    main_title_default = f"Sound Transmission Loss (STL)"
+else:
+    df = df_gnrl
+    abs_type = None
 
-n_comp   = int(df[~df["is_ref"]].groupby("stn")["is_composite"].first().sum())
-n_single = int((~df[~df["is_ref"]].groupby("stn")["is_composite"].first()).sum())
-sample_type = st.sidebar.radio("Sample Type", ["All", "Single Layer Only", "Composite Only"], index=0)
-st.sidebar.markdown("---")
+st.sidebar.header("🎛️ Global Filters")
 
 trim_sel = (st.sidebar.multiselect("Trim Level", sorted(df["trim_level"].dropna().unique())) if "trim_level" in df.columns else [])
 sup_sel  = (st.sidebar.multiselect("Material Supplier", sorted(df["material_supplier"].dropna().unique())) if "material_supplier" in df.columns else [])
 
-non_ref = df[~df["is_ref"]]
-m_min, m_max = float(non_ref[mass_col].min(skipna=True) or 0), float(non_ref[mass_col].max(skipna=True) or 100)
-mass_range   = st.sidebar.slider("Surface Mass (g/m²)", m_min, m_max, (m_min, m_max))
-
-t_min, t_max = float(non_ref["thickness_mm"].min(skipna=True) or 0), float(non_ref["thickness_mm"].max(skipna=True) or 100)
-thick_range  = st.sidebar.slider("Thickness (mm)", t_min, t_max, (t_min, t_max))
+m_min = float(df[mass_col].min(skipna=True) or 0)
+m_max = float(df[mass_col].max(skipna=True) or 100)
+mass_range = st.sidebar.slider("Surface Mass", m_min, m_max, (m_min, m_max))
 
 fdf_samples = df[~df["is_ref"]].copy()
-if sample_type == "Single Layer Only": fdf_samples = fdf_samples[~fdf_samples["is_composite"]]
-elif sample_type == "Composite Only": fdf_samples = fdf_samples[fdf_samples["is_composite"]]
 if trim_sel: fdf_samples = fdf_samples[fdf_samples["trim_level"].isin(trim_sel)]
 if sup_sel:  fdf_samples = fdf_samples[fdf_samples["material_supplier"].isin(sup_sel)]
 fdf_samples = fdf_samples[fdf_samples[mass_col].between(*mass_range) | fdf_samples[mass_col].isna()]
-fdf_samples = fdf_samples[fdf_samples["thickness_mm"].between(*thick_range) | fdf_samples["thickness_mm"].isna()]
 
-fdf_refs = df[df["is_ref"]]
-fdf      = pd.concat([fdf_samples, fdf_refs], ignore_index=True)
+fdf = pd.concat([fdf_samples, df[df["is_ref"]]], ignore_index=True)
 
 st.sidebar.markdown("---")
-ref_labels       = sorted(fdf[fdf["is_ref"]]["curve_label"].dropna().unique().tolist())
-sample_labels    = sorted(fdf[~fdf["is_ref"]]["curve_label"].dropna().unique().tolist())
-available_labels = ref_labels + sample_labels
-
-select_all      = st.sidebar.checkbox("Select All Samples", value=False)
+available_labels = sorted(fdf["curve_label"].dropna().unique().tolist())
+select_all = st.sidebar.checkbox("Select All Samples", value=False)
 selected_labels = st.sidebar.multiselect(f"Select Samples ({len(available_labels)} available)", available_labels, default=available_labels if select_all else [])
 
-st.sidebar.markdown("<small><span style='color:#7c3aed'>⊕</span> composite<br><span style='color:#d97706'>★</span> reference</small>", unsafe_allow_html=True)
-
 all_active_labels = selected_labels
-
-with st.sidebar.expander("🏆 Ranking vs Reference", expanded=False):
-    if available_labels:
-        target_ref = st.selectbox("Select Target", options=["-- Select --"] + available_labels)
-        if target_ref != "-- Select --" and abs_type:
-            if st.button("Run Analysis"):
-                ref_data = fdf[(fdf["curve_label"] == target_ref) & (fdf["frequency"] <= 2000)].dropna(subset=["frequency", abs_type])
-                ref_data = ref_data.groupby("frequency", as_index=False)[abs_type].mean()
-                ref_dict = dict(zip(ref_data["frequency"], ref_data[abs_type]))
-                
-                always_above, ranking = [], []
-                candidates = [l for l in available_labels if l != target_ref]
-                for cand in candidates:
-                    cand_data = fdf[(fdf["curve_label"] == cand) & (fdf["frequency"] <= 2000)].dropna(subset=["frequency", abs_type])
-                    if cand_data.empty: continue
-                    cand_data = cand_data.groupby("frequency", as_index=False)[abs_type].mean()
-                    
-                    weighted_diffs, sum_weights, is_always_above = [], 0, True
-                    for _, row in cand_data.iterrows():
-                        freq, val = row["frequency"], row[abs_type]
-                        if freq in ref_dict:
-                            diff = val - ref_dict[freq]
-                            weight = 2000.0 / freq
-                            weighted_diffs.append(diff * weight)
-                            sum_weights += weight
-                            if diff < 0: is_always_above = False
-                    
-                    if weighted_diffs and sum_weights > 0:
-                        avg_diff = sum(weighted_diffs) / sum_weights
-                        data_dict = {"Sample": cand, f"Weighted Score": round(avg_diff, 4)}
-                        if is_always_above: always_above.append(data_dict)
-                        ranking.append(data_dict)
-                
-                if always_above:
-                    st.success("✅ Samples consistently above (or equal to) the reference up to 2 kHz:")
-                    st.dataframe(pd.DataFrame(always_above).sort_values(by="Weighted Score", ascending=False), hide_index=True)
-                else:
-                    st.info("No sample outperforms the reference across the entire frequency range.")
-                    if ranking:
-                        st.dataframe(pd.DataFrame(ranking).sort_values(by="Weighted Score", ascending=False).head(5), hide_index=True)
-
-if not all_active_labels:
-    st.warning("👈 Select at least one sample from the sidebar to generate the charts.")
-    st.stop()
-
 plot_data = fdf[fdf["curve_label"].isin(all_active_labels)]
 
 # ─────────────────────────────────────────────────────────────────
-# TABS & PLOT & DIRECT DATA EXPORT
+# TABS
 # ─────────────────────────────────────────────────────────────────
-tab1, tab2 = st.tabs(["📈 Interactive Plot", "🗃️ Raw Data & Exports"])
+tab1, tab2, tab3 = st.tabs(["📈 Interactive Plot", "🗃️ Raw Data & Exports", "➕ Ajouter une matière"])
 
 with tab1:
-    import plotly.io as pio
+    if not all_active_labels:
+        st.info("👈 Select at least one sample from the sidebar to generate the charts.")
+    elif abs_type:
+        import plotly.io as pio
+        fig = go.Figure()
+        for label in all_active_labels:
+            sub = plot_data[plot_data["curve_label"] == label].dropna(subset=["frequency", abs_type])
+            if sub.empty: continue
+            sub = sub.groupby("frequency", as_index=False)[abs_type].mean().sort_values("frequency")
+            
+            is_ref_curve = label.startswith("★")
+            fig.add_trace(go.Scatter(
+                x=sub["frequency"], y=sub[abs_type], mode="lines+markers", name=label,
+                line=dict(dash="dash" if is_ref_curve else "solid", width=3 if is_ref_curve else 2)
+            ))
 
-    n_sel_comp = sum(1 for l in all_active_labels if l.startswith("⊕"))
-    n_sel_ref  = sum(1 for l in all_active_labels if l.startswith("★"))
-    n_sel_sing = len(all_active_labels) - n_sel_comp - n_sel_ref
-
-    col_a, col_b, col_c = st.columns([1, 1, 1])
-    with col_a: st.metric("Samples", n_sel_sing + n_sel_comp)
-    with col_b: st.metric("Composite", n_sel_comp)
-    with col_c: st.metric("References", n_sel_ref)
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    with st.expander("🛠️ Display & HTML Export Customization", expanded=True):
-        st.info("💡 **HTML Export Tip:** Set your line widths, markers, and tick settings below. Once you export the chart as HTML, you can still edit the titles by clicking directly on them!")
-        
-        c1, c2, c3 = st.columns(3)
-        with c1: main_title = st.text_input("Main Title", main_title_default)
-        with c2: x_title = st.text_input("X-Axis Title", "Frequency (Hz)")
-        with c3: y_title = st.text_input("Y-Axis Title", y_title_default)
-
-        c4, c5, c6 = st.columns(3)
-        with c4: custom_lw = st.slider("Global Line Width", 1.0, 5.0, 2.5, 0.5)
-        with c5: custom_ms = st.slider("Global Marker Size", 0, 15, 6, 1)
-        with c6:
-            show_grid = st.checkbox("Show Grid", value=True)
-            tick_density = st.radio("X-Axis Tick Density", ["Standard", "Detailed"], horizontal=True)
-
-        st.markdown("#### 🖌️ Curve Styles")
-        style1, style2, style3 = st.columns(3)
-        
-        line_styles = ["solid", "dash", "dot", "dashdot", "longdash", "longdashdot"]
-        marker_styles = ["circle", "square", "diamond", "cross", "x", "triangle-up", "pentagon", "hexagram", "star", "diamond-wide", "none"]
-
-        with style1:
-            st.markdown("**★ Reference**")
-            ref_dash = st.selectbox("Line Style (Ref)", line_styles, index=0) # solid
-            ref_marker = st.selectbox("Marker (Ref)", marker_styles, index=8) # star
-
-        with style2:
-            st.markdown("**⊕ Composite**")
-            comp_dash = st.selectbox("Line Style (Comp)", line_styles, index=1) # dash
-            comp_marker = st.selectbox("Marker (Comp)", marker_styles, index=2) # diamond
-
-        with style3:
-            st.markdown("**Single Layer**")
-            sing_dash = st.selectbox("Line Style (Single)", line_styles, index=0) # solid
-            sing_marker = st.selectbox("Marker (Single)", marker_styles, index=0) # circle
-
-    FREQ_TICKS = {
-        "alpha_cabin": [315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300, 8000, 10000],
-        "alpha_kundt": [200, 250, 315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300],
-        "alpha_cabin_stl": [315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300, 8000, 10000, 12700]
-    }
-    
-    xaxis_dict = dict(title=x_title, type="log", showgrid=show_grid, gridcolor="#e2e8f0")
-
-    if tick_density == "Standard" and abs_type in FREQ_TICKS:
-        ticks = FREQ_TICKS[abs_type]
-        xaxis_dict.update(dict(tickmode="array", tickvals=ticks, ticktext=[str(int(t)) for t in ticks]))
-    else:
-        # Detailed Grid: Display every single frequency logged to prevent Plotly from hiding points.
-        ticks = sorted(plot_data["frequency"].dropna().unique())
-        xaxis_dict.update(dict(tickmode="array", tickvals=ticks, ticktext=[str(int(t)) for t in ticks], tickangle=-45))
-
-    fig = go.Figure()
-    color_idx = 0
-    COLORS = ["#1D4ED8", "#E11D48", "#10B981", "#7C3AED", "#EA580C", "#06B6D4", "#EC4899", "#6B7280", "#84CC16", "#A16207", "#4F46E5", "#0F766E"]
-    REF_COLOR = "#D97706"
-
-    for label in all_active_labels:
-        sub = plot_data[plot_data["curve_label"] == label].dropna(subset=["frequency", abs_type])
-        if sub.empty: continue
-        sub = sub.groupby("frequency", as_index=False)[abs_type].mean().sort_values("frequency")
-
-        ref_curve  = label.startswith("★")
-        comp_curve = label.startswith("⊕")
-
-        if ref_curve:
-            color, line_dash, line_width, marker_sym, marker_sz, hover_tag = REF_COLOR, ref_dash, custom_lw + 1.0, ref_marker, custom_ms + 4, " <i>(reference)</i>"
-        elif comp_curve:
-            color, line_dash, line_width, marker_sym, marker_sz, hover_tag = COLORS[color_idx % len(COLORS)], comp_dash, custom_lw, comp_marker, custom_ms + 1, " <i>(composite)</i>"; color_idx += 1
-        else:
-            color, line_dash, line_width, marker_sym, marker_sz, hover_tag = COLORS[color_idx % len(COLORS)], sing_dash, custom_lw, sing_marker, custom_ms, ""; color_idx += 1
-
-        show_markers = marker_sym != "none" and custom_ms > 0
-
-        # Adjust formatting based on output type
-        val_format = "%.1f" if data_type == "STL" else "%.3f"
-        
-        fig.add_trace(go.Scatter(
-            x=sub["frequency"], y=sub[abs_type], 
-            mode="lines+markers" if show_markers else "lines", 
-            name=label,
-            line=dict(color=color, width=line_width, dash=line_dash), 
-            marker=dict(color=color, size=marker_sz, symbol=marker_sym),
-            hovertemplate=f"<b>%{{fullData.name}}</b><br>Freq: %{{x}} Hz<br>Value: %{{y:{val_format}}}{hover_tag}<extra></extra>"
-        ))
-
-    fig.update_layout(
-        title=main_title,
-        xaxis=xaxis_dict,
-        yaxis=dict(title=y_title, showgrid=show_grid, gridcolor="#e2e8f0"),
-        hovermode="x unified", plot_bgcolor="#ffffff", paper_bgcolor="rgba(0,0,0,0)",
-        legend=dict(orientation="h", yanchor="bottom", y=-0.45, xanchor="center", x=0.5), height=640
-    )
-    
-    if y_range_limit:
-        fig.update_layout(yaxis=dict(range=y_range_limit))
-
-    plotly_config = {
-        'editable': True,
-        'edits': {
-            'titleText': True,
-            'axisTitleText': True,
-            'legendText': True
-        },
-        'displayModeBar': True
-    }
-
-    st.plotly_chart(fig, width="stretch", config=plotly_config)
-
-    html_bytes = pio.to_html(fig, include_plotlyjs="cdn", full_html=True, config=plotly_config).encode("utf-8")
-    st.download_button(
-        label="📥 Download Chart (Interactive HTML)",
-        data=html_bytes,
-        file_name=f"{data_type.lower()}_curves.html",
-        mime="text/html",
-    )
+        fig.update_layout(
+            title=f"{data_type} ({abs_type})", xaxis=dict(type="log", title="Frequency (Hz)"), yaxis=dict(title="Value"),
+            hovermode="x unified", legend=dict(orientation="h", y=-0.2)
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
 with tab2:
     st.markdown("### 📥 Source File Download")
-    st.download_button(
-        label=f"🟢 Download Current Complete Excel File ({current_filename})",
-        data=excel_data,
-        file_name=current_filename,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
-    st.markdown("---")
+    st.download_button("🟢 Download Current Excel", data=excel_data, file_name=current_filename)
+    if not plot_data.empty and abs_type:
+        st.markdown("### 📊 Formatted Data")
+        pivot_data = plot_data.groupby(['frequency', 'curve_label'], as_index=False)[abs_type].mean()
+        wide_df = pivot_data.pivot(index="frequency", columns="curve_label", values=abs_type).reset_index()
+        st.dataframe(wide_df, hide_index=True)
 
-    st.markdown("### 📊 Formatted Data for Export")
+# ─────────────────────────────────────────────────────────────────
+# TAB 3 : AJOUT D'ÉCHANTILLON (CRUD)
+# ─────────────────────────────────────────────────────────────────
+with tab3:
+    st.header("➕ Ajouter un nouvel échantillon")
+    st.markdown("Complétez ce formulaire pour injecter de nouvelles données directement dans le fichier Excel source.")
     
-    # Préparation des données (Pivot Table)
-    pivot_data = plot_data.groupby(['frequency', 'curve_label'], as_index=False)[abs_type].mean()
-    wide_df = pivot_data.pivot(index="frequency", columns="curve_label", values=abs_type).reset_index()
-    wide_df.columns.name = None
-    wide_df = wide_df.rename(columns={"frequency": "Frequency (Hz)"})
+    # --- 1. Détermination du prochain STN ---
+    existing_stns = df_gnrl['stn'].dropna().astype(str).tolist()
+    e_nums = [int(re.search(r'\d+', s).group()) for s in existing_stns if s.startswith('E') and re.search(r'\d+', s)]
+    next_id = max(e_nums) + 1 if e_nums else 1
+    new_stn = f"E{next_id:04d}"
     
-    # Affichage interactif de la table
-    st.dataframe(wide_df, use_container_width=True, hide_index=True)
+    st.subheader(f"Nouvel Identifiant : **{new_stn}**")
     
-    st.markdown("### 📋 Copy to Excel")
-    st.info("💡 **Click the 'Copy' icon in the top right corner of the block below**, then paste it directly into your Excel file.")
+    # --- 2. Helper pour les dropdowns "Autre" ---
+    def get_options(col_name):
+        opts = [""]
+        if col_name in df_gnrl.columns:
+            opts += sorted([str(x) for x in df_gnrl[col_name].dropna().unique() if str(x).strip() != ""])
+        opts.append("➕ Autre (nouveau)")
+        return opts
+
+    # --- 3. Formulaire (sans st.form pour permettre le re-run dynamique des dropdowns) ---
+    colA, colB = st.columns(2)
     
-    # Workaround pour le "Copy to Clipboard" : conversion en texte séparé par des tabulations (format Excel)
-    tsv_data = wide_df.to_csv(index=False, sep='\t')
-    st.code(tsv_data, language="text")
-    
-    # Génération Excel Directe avec cellules formatées
-    output_excel = io.BytesIO()
-    with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
-        wide_df.to_excel(writer, index=False, sheet_name=f'{data_type}_Data')
-        worksheet = writer.sheets[f'{data_type}_Data']
+    with colA:
+        # Fournisseur
+        sup_opts = get_options("material_supplier")
+        sel_sup = st.selectbox("Fournisseur (Material Supplier)", sup_opts)
+        final_sup = st.text_input("Saisir le nouveau fournisseur", key="new_sup") if sel_sup == "➕ Autre (nouveau)" else sel_sup
         
-        # Ajustement automatique de la largeur des colonnes
-        for col in worksheet.columns:
-            max_length = 0
-            column_letter = col[0].column_letter
-            for cell in col:
-                try:
-                    if len(str(cell.value)) > max_length:
-                        max_length = len(str(cell.value))
-                except:
-                    pass
-            worksheet.column_dimensions[column_letter].width = max_length + 2
+        # Famille
+        fam_opts = get_options("material_family")
+        sel_fam = st.selectbox("Famille (Material Family)", fam_opts)
+        final_fam = st.text_input("Saisir la nouvelle famille", key="new_fam") if sel_fam == "➕ Autre (nouveau)" else sel_fam
+        
+        # Trim Level
+        trim_opts = get_options("trim_level")
+        sel_trim = st.selectbox("Trim Level", trim_opts)
+        final_trim = st.text_input("Saisir le nouveau Trim Level", key="new_trim") if sel_trim == "➕ Autre (nouveau)" else sel_trim
 
-    excel_bytes = output_excel.getvalue()
+    with colB:
+        # Masse Surfacique
+        final_mass = st.number_input("Masse Surfacique (g/m²)", min_value=0.0, step=10.0)
+        
+        # Épaisseur
+        thick_opts = get_options("thickness_mm")
+        sel_thick = st.selectbox("Épaisseur (mm)", thick_opts)
+        final_thick = st.number_input("Saisir la nouvelle épaisseur (mm)", min_value=0.0, step=0.5, key="new_thick") if sel_thick == "➕ Autre (nouveau)" else sel_thick
+        
+        # Description détaillée
+        final_desc = st.text_input("Description Détaillée (ex: 1 layer PET)")
+
+    st.markdown("---")
+    st.subheader("📊 Données Acoustiques")
     
-    st.download_button(
-        label="📥 Direct Export to Excel (.xlsx)",
-        data=excel_bytes,
-        file_name=f"{data_type.lower()}_data_export.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    # Grille de saisie des fréquences par défaut
+    default_freqs = [200, 250, 315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300, 8000, 10000]
+    input_df = pd.DataFrame({
+        "Frequency": default_freqs,
+        "Alpha Cabin": [None] * len(default_freqs),
+        "Alpha Kundt": [None] * len(default_freqs),
+        "STL (dB)": [None] * len(default_freqs)
+    })
+    
+    st.info("💡 Saisissez vos valeurs ci-dessous. Laissez vide si la donnée n'est pas disponible.")
+    edited_data = st.data_editor(input_df, num_rows="dynamic", use_container_width=True)
+
+    # --- 4. Logique de sauvegarde (Écriture Excel via Openpyxl) ---
+    if st.button("💾 Sauvegarder l'échantillon et mettre à jour le serveur", type="primary"):
+        with st.spinner("Ouverture et modification du fichier Excel..."):
+            try:
+                # Chargement du classeur Excel en mémoire
+                wb = openpyxl.load_workbook(io.BytesIO(excel_data))
+                
+                # Ajout dans la feuille GNRL
+                if sheet_names["GNRL"] in wb.sheetnames:
+                    ws_gnrl = wb[sheet_names["GNRL"]]
+                    # Trouver la colonne d'en-tête (on cherche la ligne d'en-tête)
+                    header_row_idx = None
+                    for row_idx, row in enumerate(ws_gnrl.iter_rows(values_only=True), 1):
+                        if any(str(cell).lower().find("sample") != -1 for cell in row if cell):
+                            header_row_idx = row_idx
+                            headers_gnrl = [str(cell).strip().lower() for cell in row]
+                            break
+                    
+                    if header_row_idx:
+                        new_row = [""] * len(headers_gnrl)
+                        
+                        def fill_col(col_keyword, val):
+                            for i, h in enumerate(headers_gnrl):
+                                if h and col_keyword in h: new_row[i] = val; break
+                        
+                        # Remplissage des données
+                        fill_col("sample number", new_stn)
+                        fill_col("stn", new_stn)
+                        fill_col("supplier", final_sup)
+                        fill_col("family", final_fam)
+                        fill_col("trim", final_trim)
+                        fill_col("mass", final_mass)
+                        fill_col("thickness", final_thick)
+                        fill_col("description", final_desc)
+                        fill_col("date", pd.Timestamp.now().strftime("%Y-%m-%d"))
+                        
+                        ws_gnrl.append(new_row)
+
+                # Ajout dans la feuille ABSORPTION
+                if sheet_names["ABS"] in wb.sheetnames:
+                    ws_abs = wb[sheet_names["ABS"]]
+                    for _, row in edited_data.iterrows():
+                        if pd.notna(row["Alpha Cabin"]) or pd.notna(row["Alpha Kundt"]):
+                            ws_abs.append([new_stn, row["Frequency"], row["Alpha Cabin"], row["Alpha Kundt"]])
+                            
+                # Ajout dans la feuille STL
+                if sheet_names["STL"] in wb.sheetnames:
+                    ws_stl = wb[sheet_names["STL"]]
+                    for _, row in edited_data.iterrows():
+                        if pd.notna(row["STL (dB)"]):
+                            # Format classique STL : STN, Freq, Valeur
+                            ws_stl.append([new_stn, row["Frequency"], row["STL (dB)"]])
+
+                # Sauvegarde du nouveau fichier en mémoire
+                output_buffer = io.BytesIO()
+                wb.save(output_buffer)
+                new_excel_bytes = output_buffer.getvalue()
+
+                # Envoi vers GitHub
+                commit_msg = f"Ajout du nouvel échantillon {new_stn} via l'interface Streamlit"
+                if upload_new_excel_to_github(current_filename, new_excel_bytes, commit_message):
+                    st.success(f"✅ L'échantillon {new_stn} a été ajouté avec succès ! La page va s'actualiser.")
+                    import time
+                    time.sleep(2)
+                    st.cache_data.clear()
+                    st.rerun()
+
+            except Exception as e:
+                st.error(f"❌ Erreur lors de la modification de l'Excel : {e}")
