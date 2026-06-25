@@ -202,22 +202,27 @@ def load_data(file_bytes: bytes):
     xf  = pd.ExcelFile(buf, engine="openpyxl")
 
     gnrl_sheet = next((s for s in xf.sheet_names if s.strip().upper().startswith("GNRL")), None)
-    data_sheet = next((s for s in xf.sheet_names if s.strip().upper() == "DATA"), None)
+    abs_sheet  = next((s for s in xf.sheet_names if s.strip().upper() == "ABSORPTION"), None)
+    stl_sheet  = next((s for s in xf.sheet_names if s.strip().upper() == "STL"), None)
 
-    if not gnrl_sheet or not data_sheet:
-        st.error("❌ The 'GNRL' or 'DATA' sheets could not be found.")
-        return None, None
+    if not gnrl_sheet:
+        st.error("❌ The 'GNRL' sheet could not be found.")
+        return None, None, None
+
+    if not abs_sheet and not stl_sheet:
+        st.error("❌ Neither 'ABSORPTION' nor 'STL' sheets could be found.")
+        return None, None, None
 
     raw = pd.read_excel(buf, sheet_name=gnrl_sheet, engine="openpyxl", header=None)
     header_row = next((i for i, r in raw.iterrows() if any("sample" in str(v).lower() or "stn" in str(v).lower() for v in r if pd.notna(v))), None)
-    if header_row is None: return None, None
+    if header_row is None: return None, None, None
 
     gnrl = pd.read_excel(buf, sheet_name=gnrl_sheet, engine="openpyxl", header=header_row)
     gnrl.columns = norm_cols(gnrl.columns)
     gnrl = gnrl.dropna(how="all")
 
     stn_cols = [c for c in gnrl.columns if "stn" in c or "sample" in c]
-    if not stn_cols: return None, None
+    if not stn_cols: return None, None, None
 
     short_col = next((c for c in stn_cols if gnrl[c].dropna().astype(str).str.strip().str.match(r'^E\d+').mean() > 0.4), stn_cols[-1])
     gnrl = gnrl.rename(columns={short_col: "stn"})
@@ -231,30 +236,39 @@ def load_data(file_bytes: bytes):
     gnrl["is_ref"]       = gnrl.apply(is_ref, axis=1)
     gnrl["is_composite"] = gnrl.apply(is_composite, axis=1)
 
-    data = pd.read_excel(buf, sheet_name=data_sheet, engine="openpyxl")
-    data.columns = norm_cols(data.columns)
+    def process_data_sheet(sheet_name):
+        if not sheet_name: return pd.DataFrame()
+        data = pd.read_excel(buf, sheet_name=sheet_name, engine="openpyxl")
+        data.columns = norm_cols(data.columns)
 
-    if "stn" not in data.columns:
-        stn_data_col = next((c for c in data.columns if "stn" in c or "sample" in c), None)
-        if stn_data_col: data = data.rename(columns={stn_data_col: "stn"})
-        else: return None, None
+        if "stn" not in data.columns:
+            stn_data_col = next((c for c in data.columns if "stn" in c or "sample" in c), None)
+            if stn_data_col: data = data.rename(columns={stn_data_col: "stn"})
+            else: return pd.DataFrame()
 
-    for c in data.columns:
-        if "alpha_cabin" in c: data = data.rename(columns={c: "alpha_cabin"})
-        elif "alpha_kundt" in c: data = data.rename(columns={c: "alpha_kundt"})
-        elif "frequency"   in c: data = data.rename(columns={c: "frequency"})
+        for c in data.columns:
+            # Important to check STL specifically first to not clash with plain alpha_cabin
+            if "stl" in c or "alpha_cabin_stl" in c: data = data.rename(columns={c: "alpha_cabin_stl"})
+            elif "alpha_cabin" in c: data = data.rename(columns={c: "alpha_cabin"})
+            elif "alpha_kundt" in c: data = data.rename(columns={c: "alpha_kundt"})
+            elif "frequency"   in c: data = data.rename(columns={c: "frequency"})
 
-    data["stn"] = (data["stn"].astype(str).replace({"nan": pd.NA, "None": pd.NA, "": pd.NA}).ffill().str.strip().str.upper())
-    data = data[data["stn"].str.match(STN_PATTERN, na=False)]
+        data["stn"] = (data["stn"].astype(str).replace({"nan": pd.NA, "None": pd.NA, "": pd.NA}).ffill().str.strip().str.upper())
+        data = data[data["stn"].str.match(STN_PATTERN, na=False)]
 
-    for col in ["frequency", "alpha_cabin", "alpha_kundt"]:
-        if col in data.columns: data[col] = pd.to_numeric(data[col], errors="coerce")
+        for col in ["frequency", "alpha_cabin", "alpha_kundt", "alpha_cabin_stl"]:
+            if col in data.columns: data[col] = pd.to_numeric(data[col], errors="coerce")
 
-    merged = data.merge(gnrl, on="stn", how="left")
-    merged["is_ref"]       = merged["is_ref"].fillna(False)
-    merged["is_composite"] = merged["is_composite"].fillna(False)
-    merged["curve_label"]  = merged.apply(lambda r: build_curve_label(r, mass_col), axis=1)
-    return merged, mass_col
+        merged = data.merge(gnrl, on="stn", how="left")
+        merged["is_ref"]       = merged["is_ref"].fillna(False)
+        merged["is_composite"] = merged["is_composite"].fillna(False)
+        merged["curve_label"]  = merged.apply(lambda r: build_curve_label(r, mass_col), axis=1)
+        return merged
+
+    df_abs = process_data_sheet(abs_sheet)
+    df_stl = process_data_sheet(stl_sheet)
+
+    return df_abs, df_stl, mass_col
 
 # ─────────────────────────────────────────────────────────────────
 # MAIN UI & DYNAMIC LOADING
@@ -287,13 +301,41 @@ if excel_data is None:
 
 st.caption(f"📂 Active database loaded from GitHub: `{current_filename}`")
 
-df, mass_col = load_data(excel_data)
-if df is None: st.stop()
+df_abs, df_stl, mass_col = load_data(excel_data)
+if df_abs is None: st.stop()
 
 # ─────────────────────────────────────────────────────────────────
 # SIDEBAR FILTERS
 # ─────────────────────────────────────────────────────────────────
+st.sidebar.header("📁 Data Category")
+data_options = []
+if not df_abs.empty: data_options.append("Absorption")
+if not df_stl.empty: data_options.append("STL")
+
+if not data_options:
+    st.error("❌ No valid data found in the 'ABSORPTION' or 'STL' sheets.")
+    st.stop()
+
+data_type = st.sidebar.radio("Select Category to Analyze", data_options)
+
 st.sidebar.header("🎛️ Global Filters")
+
+# Dynamically select df based on user choice
+if data_type == "Absorption":
+    df = df_abs
+    available_methods = [c for c in ["alpha_cabin", "alpha_kundt"] if c in df.columns]
+    abs_type = st.sidebar.radio("Measurement Method", available_methods) if available_methods else None
+    y_range_limit = [-0.05, 1.1]
+    y_title_default = "Absorption Coefficient α"
+    main_title_default = f"Sound Absorption Coefficients ({abs_type.replace('_', ' ').title()})" if abs_type else "Sound Absorption"
+else:
+    df = df_stl
+    available_methods = [c for c in ["alpha_cabin_stl"] if c in df.columns]
+    abs_type = st.sidebar.radio("Measurement Method", available_methods) if available_methods else "alpha_cabin_stl"
+    y_range_limit = None # Let Plotly auto-scale based on dB outputs
+    y_title_default = "Sound Transmission Loss (dB)"
+    main_title_default = f"Sound Transmission Loss (STL)"
+
 n_comp   = int(df[~df["is_ref"]].groupby("stn")["is_composite"].first().sum())
 n_single = int((~df[~df["is_ref"]].groupby("stn")["is_composite"].first()).sum())
 sample_type = st.sidebar.radio("Sample Type", ["All", "Single Layer Only", "Composite Only"], index=0)
@@ -329,14 +371,13 @@ select_all      = st.sidebar.checkbox("Select All Samples", value=False)
 selected_labels = st.sidebar.multiselect(f"Select Samples ({len(available_labels)} available)", available_labels, default=available_labels if select_all else [])
 
 st.sidebar.markdown("<small><span style='color:#7c3aed'>⊕</span> composite<br><span style='color:#d97706'>★</span> reference</small>", unsafe_allow_html=True)
-abs_type = st.sidebar.radio("Measurement Method", ["alpha_cabin", "alpha_kundt"])
 
 all_active_labels = selected_labels
 
 with st.sidebar.expander("🏆 Ranking vs Reference", expanded=False):
     if available_labels:
         target_ref = st.selectbox("Select Target", options=["-- Select --"] + available_labels)
-        if target_ref != "-- Select --":
+        if target_ref != "-- Select --" and abs_type:
             if st.button("Run Analysis"):
                 ref_data = fdf[(fdf["curve_label"] == target_ref) & (fdf["frequency"] <= 2000)].dropna(subset=["frequency", abs_type])
                 ref_data = ref_data.groupby("frequency", as_index=False)[abs_type].mean()
@@ -361,17 +402,17 @@ with st.sidebar.expander("🏆 Ranking vs Reference", expanded=False):
                     
                     if weighted_diffs and sum_weights > 0:
                         avg_diff = sum(weighted_diffs) / sum_weights
-                        data_dict = {"Sample": cand, "Weighted Score (α)": round(avg_diff, 4)}
+                        data_dict = {"Sample": cand, f"Weighted Score": round(avg_diff, 4)}
                         if is_always_above: always_above.append(data_dict)
                         ranking.append(data_dict)
                 
                 if always_above:
                     st.success("✅ Samples consistently above (or equal to) the reference up to 2 kHz:")
-                    st.dataframe(pd.DataFrame(always_above).sort_values(by="Weighted Score (α)", ascending=False), hide_index=True)
+                    st.dataframe(pd.DataFrame(always_above).sort_values(by="Weighted Score", ascending=False), hide_index=True)
                 else:
                     st.info("No sample outperforms the reference across the entire frequency range.")
                     if ranking:
-                        st.dataframe(pd.DataFrame(ranking).sort_values(by="Weighted Score (α)", ascending=False).head(5), hide_index=True)
+                        st.dataframe(pd.DataFrame(ranking).sort_values(by="Weighted Score", ascending=False).head(5), hide_index=True)
 
 if not all_active_labels:
     st.warning("👈 Select at least one sample from the sidebar to generate the charts.")
@@ -401,9 +442,9 @@ with tab1:
         st.info("💡 **HTML Export Tip:** Set your line widths, markers, and tick settings below. Once you export the chart as HTML, you can still edit the titles by clicking directly on them!")
         
         c1, c2, c3 = st.columns(3)
-        with c1: main_title = st.text_input("Main Title", f"Sound Absorption Coefficients ({abs_type.replace('_', ' ').title()})")
+        with c1: main_title = st.text_input("Main Title", main_title_default)
         with c2: x_title = st.text_input("X-Axis Title", "Frequency (Hz)")
-        with c3: y_title = st.text_input("Y-Axis Title", "Absorption Coefficient α")
+        with c3: y_title = st.text_input("Y-Axis Title", y_title_default)
 
         c4, c5, c6 = st.columns(3)
         with c4: custom_lw = st.slider("Global Line Width", 1.0, 5.0, 2.5, 0.5)
@@ -435,13 +476,14 @@ with tab1:
 
     FREQ_TICKS = {
         "alpha_cabin": [315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300, 8000, 10000],
-        "alpha_kundt": [200, 250, 315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300]
+        "alpha_kundt": [200, 250, 315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300],
+        "alpha_cabin_stl": [315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300, 8000, 10000, 12700]
     }
     
     xaxis_dict = dict(title=x_title, type="log", showgrid=show_grid, gridcolor="#e2e8f0")
 
-    if tick_density == "Standard":
-        ticks = FREQ_TICKS.get(abs_type, sorted(plot_data["frequency"].dropna().unique()))
+    if tick_density == "Standard" and abs_type in FREQ_TICKS:
+        ticks = FREQ_TICKS[abs_type]
         xaxis_dict.update(dict(tickmode="array", tickvals=ticks, ticktext=[str(int(t)) for t in ticks]))
     else:
         # Detailed Grid: Display every single frequency logged to prevent Plotly from hiding points.
@@ -470,22 +512,28 @@ with tab1:
 
         show_markers = marker_sym != "none" and custom_ms > 0
 
+        # Adjust formatting based on output type
+        val_format = "%.1f" if data_type == "STL" else "%.3f"
+        
         fig.add_trace(go.Scatter(
             x=sub["frequency"], y=sub[abs_type], 
             mode="lines+markers" if show_markers else "lines", 
             name=label,
             line=dict(color=color, width=line_width, dash=line_dash), 
             marker=dict(color=color, size=marker_sz, symbol=marker_sym),
-            hovertemplate=f"<b>%{{fullData.name}}</b><br>Freq: %{{x}} Hz<br>α: %{{y:.3f}}{hover_tag}<extra></extra>"
+            hovertemplate=f"<b>%{{fullData.name}}</b><br>Freq: %{{x}} Hz<br>Value: %{{y:{val_format}}}{hover_tag}<extra></extra>"
         ))
 
     fig.update_layout(
         title=main_title,
         xaxis=xaxis_dict,
-        yaxis=dict(title=y_title, range=[-0.05, 1.1], showgrid=show_grid, gridcolor="#e2e8f0"),
+        yaxis=dict(title=y_title, showgrid=show_grid, gridcolor="#e2e8f0"),
         hovermode="x unified", plot_bgcolor="#ffffff", paper_bgcolor="rgba(0,0,0,0)",
         legend=dict(orientation="h", yanchor="bottom", y=-0.45, xanchor="center", x=0.5), height=640
     )
+    
+    if y_range_limit:
+        fig.update_layout(yaxis=dict(range=y_range_limit))
 
     plotly_config = {
         'editable': True,
@@ -503,7 +551,7 @@ with tab1:
     st.download_button(
         label="📥 Download Chart (Interactive HTML)",
         data=html_bytes,
-        file_name="absorption_curves.html",
+        file_name=f"{data_type.lower()}_curves.html",
         mime="text/html",
     )
 
@@ -538,8 +586,8 @@ with tab2:
     # Génération Excel Directe avec cellules formatées
     output_excel = io.BytesIO()
     with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
-        wide_df.to_excel(writer, index=False, sheet_name='Absorption_Data')
-        worksheet = writer.sheets['Absorption_Data']
+        wide_df.to_excel(writer, index=False, sheet_name=f'{data_type}_Data')
+        worksheet = writer.sheets[f'{data_type}_Data']
         
         # Ajustement automatique de la largeur des colonnes
         for col in worksheet.columns:
@@ -558,6 +606,6 @@ with tab2:
     st.download_button(
         label="📥 Direct Export to Excel (.xlsx)",
         data=excel_bytes,
-        file_name="absorption_data_export.xlsx",
+        file_name=f"{data_type.lower()}_data_export.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
