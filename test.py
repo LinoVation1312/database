@@ -500,7 +500,7 @@ with tab3:
                 new_excel_bytes = output_buffer.getvalue()
 
                 # Envoi vers GitHub
-                commit_msg = f"Ajout du nouvel échantillon {new_stn} via l'interface Streamlit"
+                commit_message = f"Ajout du nouvel échantillon {new_stn} via l'interface Streamlit"
                 if upload_new_excel_to_github(current_filename, new_excel_bytes, commit_message):
                     st.success(f"✅ L'échantillon {new_stn} a été ajouté avec succès ! La page va s'actualiser.")
                     import time
